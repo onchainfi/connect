@@ -25,6 +25,8 @@ pnpm add @onchainfi/connect
 yarn add @onchainfi/connect
 ```
 
+**📖 New to the package?** See the [Integration Guide](./INTEGRATION_GUIDE.md) for step-by-step instructions with real-world examples.
+
 ## Quick Start (Simple)
 
 ### 1. Wrap Your App
