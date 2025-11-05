@@ -1,71 +1,100 @@
 'use client';
 
-import { ReactNode, useState } from 'react';
+import { ReactNode, useState, useMemo } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider, createConfig, http } from 'wagmi';
-import { base } from 'wagmi/chains';
 import { PrivyProvider } from '@privy-io/react-auth';
+import type { OnchainConnectConfig } from '../types/config';
+import { OnchainConfigProvider } from '../context/OnchainConfigContext';
+import {
+  DEFAULT_API_URL,
+  DEFAULT_CHAIN,
+  DEFAULT_TOKEN,
+  DEFAULT_APPEARANCE,
+  DEFAULT_LOGIN_METHODS,
+} from '../config/defaults';
 
-export interface OnchainConnectProps {
-  /** Your Privy App ID from https://dashboard.privy.io */
-  privyAppId: string;
-  
-  /** Your Onchain API key (optional, only needed for x402 payments) */
-  onchainApiKey?: string;
-  
-  /** Custom appearance settings */
-  appearance?: {
-    theme?: 'light' | 'dark';
-    accentColor?: string;
-    logo?: string;
-  };
-  
-  /** Login methods to enable (default: all) */
-  loginMethods?: Array<'email' | 'twitter' | 'github' | 'google' | 'wallet'>;
-  
+export interface OnchainConnectProps extends OnchainConnectConfig {
   children: ReactNode;
 }
 
-const defaultWagmiConfig = createConfig({
-  chains: [base],
-  transports: {
-    [base.id]: http(),
-  },
-});
-
 export function OnchainConnect({
   privyAppId,
+  onchainApiKey,
+  onchainApiUrl = DEFAULT_API_URL,
+  chains,
+  transports,
+  connectors,
+  wagmiConfig,
   appearance = {},
-  loginMethods = ['email', 'twitter', 'github', 'wallet'],
+  loginMethods = DEFAULT_LOGIN_METHODS as any,
+  privyConfig,
+  defaultChain = DEFAULT_CHAIN,
+  defaultToken = DEFAULT_TOKEN,
   children,
 }: OnchainConnectProps) {
   const [queryClient] = useState(() => new QueryClient());
 
+  // Use custom wagmi config or create default
+  const finalWagmiConfig = useMemo(() => {
+    if (wagmiConfig) {
+      return wagmiConfig;
+    }
+
+    const configChains = chains || [defaultChain];
+    const configTransports = transports || {
+      [defaultChain.id]: http(),
+    };
+
+    return createConfig({
+      chains: configChains as any,
+      transports: configTransports,
+      connectors,
+    });
+  }, [wagmiConfig, chains, transports, connectors, defaultChain]);
+
+  // Merge appearance with defaults
+  const finalAppearance = {
+    theme: appearance.theme || DEFAULT_APPEARANCE.theme,
+    accentColor: (appearance.accentColor || DEFAULT_APPEARANCE.accentColor) as `#${string}`,
+    logo: appearance.logo,
+    landingHeader: appearance.landingHeader || DEFAULT_APPEARANCE.landingHeader,
+    showWalletLoginFirst: appearance.showWalletLoginFirst ?? DEFAULT_APPEARANCE.showWalletLoginFirst,
+    walletChainType: 'ethereum-only' as const,
+  };
+
+  // Build Privy config (use custom config if provided, otherwise build default)
+  const finalPrivyConfig = useMemo(() => {
+    if (privyConfig) {
+      return privyConfig;
+    }
+    
+    return {
+      appearance: finalAppearance,
+      loginMethods,
+      embeddedWallets: {
+        ethereum: {
+          createOnLogin: 'users-without-wallets' as const,
+        },
+      },
+      defaultChain,
+      supportedChains: chains || [defaultChain],
+    };
+  }, [privyConfig, finalAppearance, loginMethods, defaultChain, chains]);
+
   return (
-    <PrivyProvider
-      appId={privyAppId}
-      config={{
-        appearance: {
-          theme: appearance.theme || 'dark',
-          accentColor: (appearance.accentColor || '#7C3AED') as `#${string}`,
-          logo: appearance.logo,
-          landingHeader: 'Connect to Continue',
-          showWalletLoginFirst: false,
-          walletChainType: 'ethereum-only',
-        },
-        loginMethods,
-        embeddedWallets: {
-          ethereum: {
-            createOnLogin: 'users-without-wallets',
-          },
-        },
-        defaultChain: base,
-        supportedChains: [base],
-      }}
-    >
+    <PrivyProvider appId={privyAppId} config={finalPrivyConfig}>
       <QueryClientProvider client={queryClient}>
-        <WagmiProvider config={defaultWagmiConfig}>
-          {children}
+        <WagmiProvider config={finalWagmiConfig}>
+          <OnchainConfigProvider
+            apiKey={onchainApiKey}
+            apiUrl={onchainApiUrl}
+            defaultChain={defaultChain}
+            defaultToken={defaultToken}
+            chains={chains || [defaultChain]}
+          >
+            {children}
+          </OnchainConfigProvider>
         </WagmiProvider>
       </QueryClientProvider>
     </PrivyProvider>

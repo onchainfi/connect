@@ -1,7 +1,7 @@
 {
   "name": "@onchainfi/connect",
-  "version": "0.1.0",
-  "description": "Unified wallet authentication and x402 payment SDK with Privy integration",
+  "version": "1.0.0",
+  "description": "Complete wallet authentication and x402 payment SDK with multi-chain support, pre-built UI components, and zero-config setup",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
