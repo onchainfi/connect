@@ -194,7 +194,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     return { signature, x402Header };
   }, [address, isConnected, isPrivyUser, privySignTypedData, signTypedDataAsync, finalConfig]);
 
-  const verify = useCallback(async (params: PaymentParams): Promise<PaymentResult> => {
+  const verify = useCallback(async (params: PaymentParams): Promise<PaymentResult & { x402Header?: string; network?: string; priority?: string }> => {
     if (!finalConfig.apiKey) {
       const error = new Error('Onchain API key not provided');
       params.onError?.(error);
@@ -238,7 +238,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
 
       finalConfig.callbacks.onVerificationComplete?.();
 
-      return { success: true, verified: true };
+      // Return the payment data for immediate settle
+      return { success: true, verified: true, x402Header, network, priority };
     } catch (error) {
       const err = error instanceof Error ? error : new Error('Unknown error');
       params.onError?.(err);
@@ -249,15 +250,15 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     }
   }, [finalConfig, signPayment]);
 
-  const settle = useCallback(async (params?: Partial<PaymentParams>): Promise<PaymentResult> => {
+  // Internal settle function that takes explicit parameters
+  const settleInternal = useCallback(async (
+    x402Header: string,
+    network: string,
+    priority: string,
+    params?: Partial<PaymentParams>
+  ): Promise<PaymentResult> => {
     if (!finalConfig.apiKey) {
       const error = new Error('Onchain API key not provided');
-      setError(error);
-      return { success: false, error: error.message };
-    }
-
-    if (!paymentState.x402Header) {
-      const error = new Error('No payment to settle. Call verify() first.');
       setError(error);
       return { success: false, error: error.message };
     }
@@ -275,9 +276,9 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          paymentHeader: paymentState.x402Header,
-          network: paymentState.network,
-          priority: paymentState.priority,
+          paymentHeader: x402Header,
+          network,
+          priority,
         }),
       });
 
@@ -301,7 +302,28 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     } finally {
       setIsSettling(false);
     }
-  }, [finalConfig, paymentState]);
+  }, [finalConfig]);
+
+  const settle = useCallback(async (params?: Partial<PaymentParams>): Promise<PaymentResult> => {
+    if (!finalConfig.apiKey) {
+      const error = new Error('Onchain API key not provided');
+      setError(error);
+      return { success: false, error: error.message };
+    }
+
+    if (!paymentState.x402Header) {
+      const error = new Error('No payment to settle. Call verify() first.');
+      setError(error);
+      return { success: false, error: error.message };
+    }
+
+    return settleInternal(
+      paymentState.x402Header,
+      paymentState.network!,
+      paymentState.priority!,
+      params
+    );
+  }, [finalConfig, paymentState, settleInternal]);
 
   const pay = useCallback(async (params: PaymentParams): Promise<PaymentResult> => {
     setIsPaying(true);
@@ -316,7 +338,13 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
 
       // Auto-settle if enabled
       if (finalConfig.autoSettle) {
-        const settleResult = await settle(params);
+        // Pass the x402Header directly instead of relying on state
+        const settleResult = await settleInternal(
+          verifyResult.x402Header!,
+          verifyResult.network!,
+          verifyResult.priority!,
+          params
+        );
         return settleResult;
       }
 
@@ -329,7 +357,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     } finally {
       setIsPaying(false);
     }
-  }, [verify, settle, finalConfig.autoSettle]);
+  }, [verify, finalConfig.autoSettle]);
 
   return {
     pay,
