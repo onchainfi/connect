@@ -52,6 +52,9 @@ export interface OnchainConnectConfig {
   connectors?: CreateConnectorFn[];
   wagmiConfig?: any; // Full wagmi Config type
 
+  // Optional - Solana Configuration
+  solanaRpcUrl?: string;
+
   // Optional - Privy Configuration
   appearance?: AppearanceConfig;
   loginMethods?: Array<'email' | 'twitter' | 'github' | 'google' | 'wallet'>;

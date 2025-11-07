@@ -28,6 +28,7 @@ export function OnchainConnect({
   transports,
   connectors,
   wagmiConfig,
+  solanaRpcUrl,
   appearance = {},
   loginMethods = DEFAULT_LOGIN_METHODS as any,
   privyConfig,
@@ -68,15 +69,18 @@ export function OnchainConnect({
   // Setup Solana wallet adapters
   const solanaEndpoint = useMemo(
     () => {
-      // Use env var if available
+      // Priority: prop > env var > public fallback
+      if (solanaRpcUrl) return solanaRpcUrl;
+      
       if (typeof window !== 'undefined') {
         const envRpc = (window as any).NEXT_PUBLIC_SOLANA_RPC_URL;
         if (envRpc) return envRpc;
       }
-      // Default to QuickNode (reliable, good rate limits)
-      return 'https://prettiest-quiet-film.solana-mainnet.quiknode.pro/f3546cd2f213619423ba121bfe4786c4c8eb1a3c/';
+      
+      // Fallback to public (rate-limited, but safe)
+      return 'https://api.mainnet-beta.solana.com';
     },
-    []
+    [solanaRpcUrl]
   );
 
   const solanaWallets = useMemo(
