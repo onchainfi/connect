@@ -1,11 +1,13 @@
 import { useState, useCallback } from 'react';
 import { useSignTypedData, useChainId } from 'wagmi';
 import { usePrivy } from '@privy-io/react-auth';
+import { useWallet as useSolanaWallet } from '@solana/wallet-adapter-react';
 import { useOnchainWallet } from './useOnchainWallet';
 import { useOnchainConfig } from '../context/OnchainConfigContext';
 import type { UseOnchainPayConfig, TokenConfig } from '../types/config';
 import { parseTokenAmount } from '../config/tokens';
 import { DEFAULT_PRIORITY } from '../config/defaults';
+import { isSolanaNetwork } from '../config/chains';
 
 export interface PaymentParams {
   /** Recipient address */
@@ -62,8 +64,9 @@ interface PaymentState {
 export function useOnchainPay(config?: UseOnchainPayConfig) {
   const globalConfig = useOnchainConfig();
   const { address, isConnected, isPrivyUser } = useOnchainWallet();
-  const { signTypedData: privySignTypedData } = usePrivy();
+  const { signTypedData: privySignTypedData, user } = usePrivy();
   const { signTypedDataAsync } = useSignTypedData();
+  const solanaWallet = useSolanaWallet();
   const currentChainId = useChainId();
 
   // State
@@ -97,6 +100,78 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     setPaymentState({});
   }, []);
 
+  /**
+   * Sign a Solana payment (works with both Privy and external wallets)
+   */
+  const signSolanaPayment = useCallback(async (params: PaymentParams): Promise<{ x402Header: string }> => {
+    if (!isConnected || !address) {
+      throw new Error('Solana wallet not connected');
+    }
+
+    const { to, amount, token: paramToken } = params;
+    const useToken = paramToken || finalConfig.token;
+
+    // Callbacks
+    finalConfig.callbacks.onSigningStart?.();
+
+    // Parse amount to token atomic units
+    const amountBigInt = parseTokenAmount(amount, useToken.decimals);
+
+    // Generate random nonce (32 bytes)
+    const nonceArray = new Uint8Array(32);
+    crypto.getRandomValues(nonceArray);
+    const nonce = Array.from(nonceArray).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    // Create Solana payment message
+    const timestamp = Date.now();
+    const paymentMessage = {
+      from: address,
+      to,
+      value: amountBigInt.toString(),
+      token: useToken.address,
+      nonce: `0x${nonce}`,
+      timestamp,
+    };
+
+    const messageString = JSON.stringify(paymentMessage);
+    const messageBytes = new TextEncoder().encode(messageString);
+
+    let signature: Uint8Array;
+
+    // Check if using Privy Solana wallet
+    if (isPrivyUser && user?.wallet?.chainType === 'solana') {
+      // Privy Solana wallet - use Privy's signMessage API
+      // @ts-ignore - Privy's wallet type doesn't include signMessage but it exists
+      const privyResult = await user.wallet.signMessage(messageBytes);
+      signature = new Uint8Array(Buffer.from(privyResult, 'base64'));
+    } else if (solanaWallet.signMessage) {
+      // External Solana wallet (Phantom, Solflare)
+      signature = await solanaWallet.signMessage(messageBytes);
+    } else {
+      throw new Error('Solana wallet does not support message signing');
+    }
+
+    finalConfig.callbacks.onSigningComplete?.();
+
+    // Create x402 payment header for Solana
+    const x402Header = btoa(JSON.stringify({
+      x402Version: 1,
+      scheme: 'exact',
+      network: params.sourceNetwork || 'solana',
+      payload: {
+        message: Buffer.from(messageBytes).toString('base64'),
+        signature: Buffer.from(signature).toString('base64'),
+        publicKey: address,
+        authorization: paymentMessage, // Include for backend parsing
+      },
+    }));
+
+    return { x402Header };
+  }, [address, isConnected, isPrivyUser, user, solanaWallet, finalConfig]);
+
+  /**
+   * Sign an EVM payment using EIP-712
+   */
   const signPayment = useCallback(async (params: PaymentParams): Promise<{ signature: string; x402Header: string }> => {
     if (!isConnected || !address) {
       throw new Error('Wallet not connected');
@@ -215,12 +290,25 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     try {
       finalConfig.callbacks.onVerificationStart?.();
 
-      const { signature, x402Header } = await signPayment(params);
-      
       // Determine source and destination networks
       const sourceNetwork = params.sourceNetwork || params.network || finalConfig.network || 'base';
       const destinationNetwork = params.destinationNetwork || params.network || finalConfig.network || 'base';
       const priority = params.priority || DEFAULT_PRIORITY;
+
+      // Route to appropriate signing method based on source network
+      let x402Header: string;
+      let signature: string | undefined;
+
+      if (isSolanaNetwork(sourceNetwork)) {
+        // Solana signing
+        const result = await signSolanaPayment({ ...params, sourceNetwork, destinationNetwork });
+        x402Header = result.x402Header;
+      } else {
+        // EVM signing (EIP-712)
+        const result = await signPayment(params);
+        x402Header = result.x402Header;
+        signature = result.signature;
+      }
 
       // Store state for potential settle call
       setPaymentState({ signature, x402Header, sourceNetwork, destinationNetwork, priority });
