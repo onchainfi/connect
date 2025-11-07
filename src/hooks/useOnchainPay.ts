@@ -1,7 +1,17 @@
 import { useState, useCallback } from 'react';
 import { useSignTypedData, useChainId } from 'wagmi';
 import { usePrivy } from '@privy-io/react-auth';
-import { useWallet as useSolanaWallet } from '@solana/wallet-adapter-react';
+import { useWallet as useSolanaWallet, useConnection } from '@solana/wallet-adapter-react';
+import { 
+  PublicKey, 
+  TransactionMessage, 
+  VersionedTransaction
+} from '@solana/web3.js';
+import { 
+  createTransferCheckedInstruction, 
+  getAssociatedTokenAddress,
+  TOKEN_PROGRAM_ID 
+} from '@solana/spl-token';
 import { useOnchainWallet } from './useOnchainWallet';
 import { useOnchainConfig } from '../context/OnchainConfigContext';
 import type { UseOnchainPayConfig, TokenConfig } from '../types/config';
@@ -67,6 +77,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
   const { signTypedData: privySignTypedData, user } = usePrivy();
   const { signTypedDataAsync } = useSignTypedData();
   const solanaWallet = useSolanaWallet();
+  const { connection } = useConnection();
   const currentChainId = useChainId();
 
   // State
@@ -101,7 +112,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
   }, []);
 
   /**
-   * Sign a Solana payment (works with both Privy and external wallets)
+   * Sign a Solana payment by creating an actual SPL token transfer transaction
+   * Per OctonetAI docs: requires versioned transaction, not just signed message
    */
   const signSolanaPayment = useCallback(async (params: PaymentParams): Promise<{ x402Header: string }> => {
     if (!isConnected || !address) {
@@ -118,65 +130,78 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     // Callbacks
     finalConfig.callbacks.onSigningStart?.();
 
-    // Parse amount to token atomic units
-    const amountBigInt = parseTokenAmount(amount, useToken.decimals);
+    // Parse amount to token atomic units (USDC has 6 decimals on Solana)
+    const amountInLamports = parseTokenAmount(amount, useToken.decimals);
 
-    // Generate random nonce (32 bytes)
-    const nonceArray = new Uint8Array(32);
-    crypto.getRandomValues(nonceArray);
-    const nonce = Array.from(nonceArray).map(b => b.toString(16).padStart(2, '0')).join('');
+    try {
+      // Create Solana public keys
+      const fromPubkey = new PublicKey(address);
+      const toPubkey = new PublicKey(to);
+      const mintPubkey = new PublicKey(useToken.address);
 
-    // Create Solana payment message with EVM-compatible fields
-    const timestamp = Date.now();
-    const validAfter = 0;
-    const validBefore = Math.floor(timestamp / 1000) + 3600; // 1 hour from now
-    
-    const paymentMessage = {
-      from: address,
-      to,
-      value: amountBigInt.toString(),
-      token: useToken.address, // This will be Solana USDC address
-      nonce: `0x${nonce}`,
-      validAfter: validAfter.toString(),
-      validBefore: validBefore.toString(),
-      timestamp,
-    };
+      // Get associated token accounts
+      const fromTokenAccount = await getAssociatedTokenAddress(mintPubkey, fromPubkey);
+      const toTokenAccount = await getAssociatedTokenAddress(mintPubkey, toPubkey);
 
-    const messageString = JSON.stringify(paymentMessage);
-    const messageBytes = new TextEncoder().encode(messageString);
+      // Get latest blockhash
+      const { blockhash } = await connection.getLatestBlockhash('finalized');
 
-    let signature: Uint8Array;
+      // Create SPL token transfer instruction
+      const transferInstruction = createTransferCheckedInstruction(
+        fromTokenAccount,
+        mintPubkey,
+        toTokenAccount,
+        fromPubkey,
+        BigInt(amountInLamports.toString()),
+        useToken.decimals,
+        [],
+        TOKEN_PROGRAM_ID
+      );
 
-    // Check if using Privy Solana wallet
-    if (isPrivyUser && user?.wallet?.chainType === 'solana') {
-      // Privy Solana wallet - use Privy's signMessage API
-      // @ts-ignore - Privy's wallet type doesn't include signMessage but it exists
-      const privyResult = await user.wallet.signMessage(messageBytes);
-      signature = new Uint8Array(Buffer.from(privyResult, 'base64'));
-    } else if (solanaWallet.signMessage) {
-      // External Solana wallet (Phantom, Solflare)
-      signature = await solanaWallet.signMessage(messageBytes);
-    } else {
-      throw new Error('Solana wallet does not support message signing');
+      // Create versioned transaction (v0) per OctonetAI spec
+      const messageV0 = new TransactionMessage({
+        payerKey: fromPubkey,
+        recentBlockhash: blockhash,
+        instructions: [transferInstruction],
+      }).compileToV0Message();
+
+      const transaction = new VersionedTransaction(messageV0);
+
+      // Sign transaction
+      let signedTransaction: VersionedTransaction;
+
+      if (isPrivyUser && user?.wallet?.chainType === 'solana') {
+        // Privy Solana wallet
+        // @ts-ignore - Privy's wallet type
+        const signedTx = await user.wallet.signTransaction(transaction);
+        signedTransaction = signedTx;
+      } else if (solanaWallet.signTransaction) {
+        // External Solana wallet (Phantom, Solflare)
+        signedTransaction = await solanaWallet.signTransaction(transaction);
+      } else {
+        throw new Error('Solana wallet does not support transaction signing');
+      }
+
+      finalConfig.callbacks.onSigningComplete?.();
+
+      // Serialize transaction to base64
+      const serializedTransaction = Buffer.from(signedTransaction.serialize()).toString('base64');
+
+      // Create x402 payment header for Solana (per OctonetAI spec)
+      const x402Header = btoa(JSON.stringify({
+        x402Version: 1,
+        scheme: 'exact',
+        network: params.sourceNetwork || 'solana',
+        payload: {
+          transaction: serializedTransaction, // ← Key: use 'transaction', not 'message'
+        },
+      }));
+
+      return { x402Header };
+    } catch (error: any) {
+      throw new Error(`Solana transaction creation failed: ${error.message}`);
     }
-
-    finalConfig.callbacks.onSigningComplete?.();
-
-    // Create x402 payment header for Solana
-    const x402Header = btoa(JSON.stringify({
-      x402Version: 1,
-      scheme: 'exact',
-      network: params.sourceNetwork || 'solana',
-      payload: {
-        message: Buffer.from(messageBytes).toString('base64'),
-        signature: Buffer.from(signature).toString('base64'),
-        publicKey: address,
-        authorization: paymentMessage, // Include for backend parsing
-      },
-    }));
-
-    return { x402Header };
-  }, [address, isConnected, isPrivyUser, user, solanaWallet, finalConfig]);
+  }, [address, isConnected, isPrivyUser, user, solanaWallet, connection, finalConfig]);
 
   /**
    * Sign an EVM payment using EIP-712
