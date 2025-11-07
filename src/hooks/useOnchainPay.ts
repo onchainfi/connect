@@ -108,8 +108,12 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       throw new Error('Solana wallet not connected');
     }
 
-    const { to, amount, token: paramToken } = params;
-    const useToken = paramToken || finalConfig.token;
+    const { to, amount, token: paramToken, sourceNetwork } = params;
+    
+    // Get correct token config for Solana network
+    const { SUPPORTED_CHAINS } = await import('../config/chains');
+    const solanaChain = sourceNetwork?.includes('devnet') ? SUPPORTED_CHAINS.solanaDevnet : SUPPORTED_CHAINS.solana;
+    const useToken = paramToken || solanaChain.tokens.usdc;
 
     // Callbacks
     finalConfig.callbacks.onSigningStart?.();
@@ -122,14 +126,19 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     crypto.getRandomValues(nonceArray);
     const nonce = Array.from(nonceArray).map(b => b.toString(16).padStart(2, '0')).join('');
 
-    // Create Solana payment message
+    // Create Solana payment message with EVM-compatible fields
     const timestamp = Date.now();
+    const validAfter = 0;
+    const validBefore = Math.floor(timestamp / 1000) + 3600; // 1 hour from now
+    
     const paymentMessage = {
       from: address,
       to,
       value: amountBigInt.toString(),
-      token: useToken.address,
+      token: useToken.address, // This will be Solana USDC address
       nonce: `0x${nonce}`,
+      validAfter: validAfter.toString(),
+      validBefore: validBefore.toString(),
       timestamp,
     };
 
