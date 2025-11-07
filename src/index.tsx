@@ -56,7 +56,7 @@ export type {
 } from './types/config';
 
 // ===== Config & Utilities =====
-export { SUPPORTED_CHAINS, getTokenAddress, getTokenConfig, getChainConfig, getChainConfigByName } from './config/chains';
+export { SUPPORTED_CHAINS, getTokenAddress, getTokenConfig, getChainConfig, getChainConfigByName, isSolanaNetwork, getExplorerUrl } from './config/chains';
 export { COMMON_TOKENS, formatTokenAmount, parseTokenAmount } from './config/tokens';
 export { 
   DEFAULT_API_URL, 
@@ -67,4 +67,7 @@ export {
   DEFAULT_APPEARANCE, 
   DEFAULT_LOGIN_METHODS 
 } from './config/defaults';
+
+// ===== Solana Wallet Adapter (Re-export for consuming apps) =====
+export { useWallet as useSolanaWallet, useConnection as useSolanaConnection } from '@solana/wallet-adapter-react';
 
