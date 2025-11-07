@@ -5,12 +5,17 @@ import { useWallet as useSolanaWallet, useConnection } from '@solana/wallet-adap
 import { 
   PublicKey, 
   TransactionMessage, 
-  VersionedTransaction
+  VersionedTransaction,
+  ComputeBudgetProgram,
+  TransactionInstruction,
+  SystemProgram
 } from '@solana/web3.js';
 import { 
   createTransferCheckedInstruction, 
   getAssociatedTokenAddress,
-  TOKEN_PROGRAM_ID 
+  getMint,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID
 } from '@solana/spl-token';
 import { useOnchainWallet } from './useOnchainWallet';
 import { useOnchainConfig } from '../context/OnchainConfigContext';
@@ -112,8 +117,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
   }, []);
 
   /**
-   * Sign a Solana payment by creating an actual SPL token transfer transaction
-   * Per OctonetAI docs: requires versioned transaction, not just signed message
+   * Sign a Solana payment transaction
+   * Implementation based on PayAI's x402-solana: github.com/PayAINetwork/x402-solana
    */
   const signSolanaPayment = useCallback(async (params: PaymentParams): Promise<{ x402Header: string }> => {
     if (!isConnected || !address) {
@@ -130,53 +135,106 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     // Callbacks
     finalConfig.callbacks.onSigningStart?.();
 
-    // Parse amount to token atomic units (USDC has 6 decimals on Solana)
-    const amountInLamports = parseTokenAmount(amount, useToken.decimals);
+    // Parse amount to token atomic units
+    const amountBigInt = parseTokenAmount(amount, useToken.decimals);
 
     try {
       // Create Solana public keys
-      const fromPubkey = new PublicKey(address);
-      const toPubkey = new PublicKey(to);
+      const userPubkey = new PublicKey(address);
+      const destination = new PublicKey(to);
       const mintPubkey = new PublicKey(useToken.address);
 
-      // Get associated token accounts
-      const fromTokenAccount = await getAssociatedTokenAddress(mintPubkey, fromPubkey);
-      const toTokenAccount = await getAssociatedTokenAddress(mintPubkey, toPubkey);
-
       // Get latest blockhash
-      const { blockhash } = await connection.getLatestBlockhash('finalized');
+      const { blockhash } = await connection.getLatestBlockhash('confirmed');
 
-      // Create SPL token transfer instruction
-      const transferInstruction = createTransferCheckedInstruction(
-        fromTokenAccount,
-        mintPubkey,
-        toTokenAccount,
-        fromPubkey,
-        BigInt(amountInLamports.toString()),
-        useToken.decimals,
-        [],
-        TOKEN_PROGRAM_ID
+      // Determine token program (TOKEN vs TOKEN_2022)
+      const mintInfo = await connection.getAccountInfo(mintPubkey, 'confirmed');
+      const programId = mintInfo?.owner?.toBase58() === TOKEN_2022_PROGRAM_ID.toBase58()
+        ? TOKEN_2022_PROGRAM_ID
+        : TOKEN_PROGRAM_ID;
+
+      // Fetch mint to get decimals
+      const mint = await getMint(connection, mintPubkey, undefined, programId);
+
+      // Get associated token accounts
+      const sourceAta = await getAssociatedTokenAddress(mintPubkey, userPubkey, false, programId);
+      const destinationAta = await getAssociatedTokenAddress(mintPubkey, destination, false, programId);
+
+      // Check if source ATA exists (user must have tokens)
+      const sourceAtaInfo = await connection.getAccountInfo(sourceAta, 'confirmed');
+      if (!sourceAtaInfo) {
+        throw new Error(`You don't have a ${useToken.symbol} token account. Please fund your Solana wallet with ${useToken.symbol} first.`);
+      }
+
+      const instructions: TransactionInstruction[] = [];
+
+      // CRITICAL: ComputeBudget instructions MUST be at positions 0 and 1
+      // Facilitators require these for proper transaction processing
+      instructions.push(
+        ComputeBudgetProgram.setComputeUnitLimit({
+          units: 40_000, // Sufficient for SPL transfer + ATA creation
+        })
       );
 
-      // Create versioned transaction (v0) per OctonetAI spec
-      const messageV0 = new TransactionMessage({
-        payerKey: fromPubkey,
+      instructions.push(
+        ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: 1, // Minimal priority fee
+        })
+      );
+
+      // Check if destination ATA exists, create if needed
+      // Facilitator will be the fee payer for ATA creation
+      const destAtaInfo = await connection.getAccountInfo(destinationAta, 'confirmed');
+      if (!destAtaInfo) {
+        const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+        
+        const createAtaInstruction = new TransactionInstruction({
+          keys: [
+            { pubkey: userPubkey, isSigner: false, isWritable: true }, // Fee payer (facilitator will replace)
+            { pubkey: destinationAta, isSigner: false, isWritable: true },
+            { pubkey: destination, isSigner: false, isWritable: false },
+            { pubkey: mintPubkey, isSigner: false, isWritable: false },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: programId, isSigner: false, isWritable: false },
+          ],
+          programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+          data: Buffer.from([0]), // CreateATA discriminator
+        });
+
+        instructions.push(createAtaInstruction);
+      }
+
+      // SPL token transfer instruction
+      instructions.push(
+        createTransferCheckedInstruction(
+          sourceAta,
+          mintPubkey,
+          destinationAta,
+          userPubkey,
+          BigInt(amountBigInt.toString()),
+          mint.decimals,
+          [],
+          programId
+        )
+      );
+
+      // Create versioned transaction
+      // User signs, facilitator will co-sign as fee payer
+      const message = new TransactionMessage({
+        payerKey: userPubkey, // Facilitator adjusts this when co-signing
         recentBlockhash: blockhash,
-        instructions: [transferInstruction],
+        instructions,
       }).compileToV0Message();
 
-      const transaction = new VersionedTransaction(messageV0);
+      const transaction = new VersionedTransaction(message);
 
-      // Sign transaction
+      // Sign with user's wallet
       let signedTransaction: VersionedTransaction;
 
       if (isPrivyUser && user?.wallet?.chainType === 'solana') {
-        // Privy Solana wallet
-        // @ts-ignore - Privy's wallet type
-        const signedTx = await user.wallet.signTransaction(transaction);
-        signedTransaction = signedTx;
+        // @ts-ignore - Privy Solana wallet
+        signedTransaction = await user.wallet.signTransaction(transaction);
       } else if (solanaWallet.signTransaction) {
-        // External Solana wallet (Phantom, Solflare)
         signedTransaction = await solanaWallet.signTransaction(transaction);
       } else {
         throw new Error('Solana wallet does not support transaction signing');
@@ -184,22 +242,22 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
 
       finalConfig.callbacks.onSigningComplete?.();
 
-      // Serialize transaction to base64
+      // Serialize partially-signed transaction
       const serializedTransaction = Buffer.from(signedTransaction.serialize()).toString('base64');
 
-      // Create x402 payment header for Solana (per OctonetAI spec)
+      // Create x402 payment header
       const x402Header = btoa(JSON.stringify({
         x402Version: 1,
         scheme: 'exact',
         network: params.sourceNetwork || 'solana',
         payload: {
-          transaction: serializedTransaction, // ← Key: use 'transaction', not 'message'
+          transaction: serializedTransaction,
         },
       }));
 
       return { x402Header };
     } catch (error: any) {
-      throw new Error(`Solana transaction creation failed: ${error.message}`);
+      throw new Error(`Solana payment failed: ${error.message}`);
     }
   }, [address, isConnected, isPrivyUser, user, solanaWallet, connection, finalConfig]);
 
