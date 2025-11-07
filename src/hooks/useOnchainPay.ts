@@ -219,9 +219,11 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       );
 
       // Create versioned transaction
-      // User signs, facilitator will co-sign as fee payer
+      // Use PayAI's feePayer as transaction payer (they pay fees, not user)
+      const PAYAI_FEE_PAYER = new PublicKey('2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4');
+      
       const message = new TransactionMessage({
-        payerKey: userPubkey, // Facilitator adjusts this when co-signing
+        payerKey: PAYAI_FEE_PAYER, // PayAI's fee payer (will co-sign and pay fees)
         recentBlockhash: blockhash,
         instructions,
       }).compileToV0Message();
