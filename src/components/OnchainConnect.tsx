@@ -4,6 +4,8 @@ import { ReactNode, useState, useMemo } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider, createConfig, http } from 'wagmi';
 import { PrivyProvider } from '@privy-io/react-auth';
+import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
+import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
 import type { OnchainConnectConfig } from '../types/config';
 import { OnchainConfigProvider } from '../context/OnchainConfigContext';
 import {
@@ -60,8 +62,22 @@ export function OnchainConnect({
     logo: appearance.logo,
     landingHeader: appearance.landingHeader || DEFAULT_APPEARANCE.landingHeader,
     showWalletLoginFirst: appearance.showWalletLoginFirst ?? DEFAULT_APPEARANCE.showWalletLoginFirst,
-    walletChainType: 'ethereum-only' as const,
+    walletChainType: 'ethereum-and-solana' as const, // Support both chains
   };
+
+  // Setup Solana wallet adapters
+  const solanaEndpoint = useMemo(
+    () => 'https://api.mainnet-beta.solana.com',
+    []
+  );
+
+  const solanaWallets = useMemo(
+    () => [
+      new PhantomWalletAdapter(),
+      new SolflareWalletAdapter(),
+    ],
+    []
+  );
 
   // Build Privy config (use custom config if provided, otherwise build default)
   const finalPrivyConfig = useMemo(() => {
@@ -76,6 +92,9 @@ export function OnchainConnect({
         ethereum: {
           createOnLogin: 'users-without-wallets' as const,
         },
+        solana: {
+          createOnLogin: 'users-without-wallets' as const, // NEW: Auto-create Solana wallets
+        },
       },
       defaultChain,
       supportedChains: chains || [defaultChain],
@@ -83,21 +102,25 @@ export function OnchainConnect({
   }, [privyConfig, finalAppearance, loginMethods, defaultChain, chains]);
 
   return (
-    <PrivyProvider appId={privyAppId} config={finalPrivyConfig}>
-      <QueryClientProvider client={queryClient}>
-        <WagmiProvider config={finalWagmiConfig}>
-          <OnchainConfigProvider
-            apiKey={onchainApiKey}
-            apiUrl={onchainApiUrl}
-            defaultChain={defaultChain}
-            defaultToken={defaultToken}
-            chains={chains || [defaultChain]}
-          >
-            {children}
-          </OnchainConfigProvider>
-        </WagmiProvider>
-      </QueryClientProvider>
-    </PrivyProvider>
+    <ConnectionProvider endpoint={solanaEndpoint}>
+      <WalletProvider wallets={solanaWallets} autoConnect={false}>
+        <PrivyProvider appId={privyAppId} config={finalPrivyConfig}>
+          <QueryClientProvider client={queryClient}>
+            <WagmiProvider config={finalWagmiConfig}>
+              <OnchainConfigProvider
+                apiKey={onchainApiKey}
+                apiUrl={onchainApiUrl}
+                defaultChain={defaultChain}
+                defaultToken={defaultToken}
+                chains={chains || [defaultChain]}
+              >
+                {children}
+              </OnchainConfigProvider>
+            </WagmiProvider>
+          </QueryClientProvider>
+        </PrivyProvider>
+      </WalletProvider>
+    </ConnectionProvider>
   );
 }
 
