@@ -67,7 +67,15 @@ export function OnchainConnect({
 
   // Setup Solana wallet adapters
   const solanaEndpoint = useMemo(
-    () => 'https://api.mainnet-beta.solana.com',
+    () => {
+      // Use env var if available
+      if (typeof window !== 'undefined') {
+        const envRpc = (window as any).NEXT_PUBLIC_SOLANA_RPC_URL;
+        if (envRpc) return envRpc;
+      }
+      // Default to QuickNode (reliable, good rate limits)
+      return 'https://prettiest-quiet-film.solana-mainnet.quiknode.pro/f3546cd2f213619423ba121bfe4786c4c8eb1a3c/';
+    },
     []
   );
 
