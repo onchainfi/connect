@@ -3,7 +3,7 @@ import type { Chain } from 'viem';
 import type { PrivyClientConfig } from '@privy-io/react-auth';
 
 export interface TokenConfig {
-  address: `0x${string}`;
+  address: `0x${string}` | string; // Allow both EVM (0x...) and Solana (base58) addresses
   symbol: string;
   decimals: number;
   name?: string;

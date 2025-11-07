@@ -97,6 +97,55 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       },
     },
   },
+  // Solana chains
+  solana: {
+    id: 1399811149, // Custom ID for Solana mainnet
+    name: 'Solana',
+    nativeCurrency: {
+      name: 'SOL',
+      symbol: 'SOL',
+      decimals: 9,
+    },
+    rpcUrls: {
+      default: { http: ['https://api.mainnet-beta.solana.com'] },
+      public: { http: ['https://api.mainnet-beta.solana.com'] },
+    },
+    blockExplorers: {
+      default: { name: 'Solscan', url: 'https://solscan.io' },
+    },
+    tokens: {
+      usdc: {
+        address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' as any,
+        symbol: 'USDC',
+        decimals: 6,
+        name: 'USD Coin',
+      },
+    },
+  },
+  solanaDevnet: {
+    id: 1399811150, // Custom ID for Solana devnet
+    name: 'Solana Devnet',
+    nativeCurrency: {
+      name: 'SOL',
+      symbol: 'SOL',
+      decimals: 9,
+    },
+    rpcUrls: {
+      default: { http: ['https://api.devnet.solana.com'] },
+      public: { http: ['https://api.devnet.solana.com'] },
+    },
+    blockExplorers: {
+      default: { name: 'Solscan Devnet', url: 'https://solscan.io' },
+    },
+    tokens: {
+      usdc: {
+        address: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as any,
+        symbol: 'USDC',
+        decimals: 6,
+        name: 'USD Coin',
+      },
+    },
+  },
 };
 
 /**
@@ -105,7 +154,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
 export function getTokenAddress(
   chainId: number,
   tokenSymbol: string = 'usdc'
-): `0x${string}` | undefined {
+): string | undefined {
   const chain = Object.values(SUPPORTED_CHAINS).find(c => c.id === chainId);
   return chain?.tokens[tokenSymbol.toLowerCase()]?.address;
 }
@@ -130,5 +179,37 @@ export function getChainConfig(chainId: number): ChainConfig | undefined {
  */
 export function getChainConfigByName(networkName: string): ChainConfig | undefined {
   return SUPPORTED_CHAINS[networkName.toLowerCase()];
+}
+
+/**
+ * Check if a network is Solana-based
+ * @param network - Network name or chain ID
+ * @returns true if network is Solana
+ */
+export function isSolanaNetwork(network: string | number): boolean {
+  if (typeof network === 'number') {
+    return network === 1399811149 || network === 1399811150;
+  }
+  return network.toLowerCase().startsWith('solana');
+}
+
+/**
+ * Get explorer URL for a transaction
+ * @param network - Network name
+ * @param txHash - Transaction hash
+ * @returns Explorer URL
+ */
+export function getExplorerUrl(network: string, txHash: string): string {
+  if (isSolanaNetwork(network)) {
+    const isDevnet = network.toLowerCase().includes('devnet');
+    return `https://solscan.io/tx/${txHash}${isDevnet ? '?cluster=devnet' : ''}`;
+  }
+  
+  const chain = getChainConfigByName(network);
+  if (chain?.blockExplorers?.default) {
+    return `${chain.blockExplorers.default.url}/tx/${txHash}`;
+  }
+  
+  return '';
 }
 

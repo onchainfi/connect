@@ -14,7 +14,13 @@ export interface PaymentParams {
   /** Amount in token units (e.g., "0.10" for 10 cents) */
   amount: string;
   
-  /** Network (optional, uses config default) */
+  /** Source network - where payment originates (optional, auto-detected from wallet) */
+  sourceNetwork?: string;
+  
+  /** Destination network - where recipient receives payment (required for cross-chain) */
+  destinationNetwork?: string;
+  
+  /** Network (deprecated, use sourceNetwork/destinationNetwork instead) */
   network?: string;
   
   /** Chain ID (optional, uses config default) */
@@ -44,7 +50,8 @@ export interface PaymentResult {
 interface PaymentState {
   signature?: string;
   x402Header?: string;
-  network?: string;
+  sourceNetwork?: string;
+  destinationNetwork?: string;
   priority?: string;
 }
 
@@ -117,7 +124,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       name: useToken.name || 'USD Coin',
       version: '2',
       chainId: useChainId,
-      verifyingContract: useToken.address,
+      verifyingContract: useToken.address as `0x${string}`,
     };
 
     const types = {
@@ -177,7 +184,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     const x402Header = btoa(JSON.stringify({
       x402Version: 1,
       scheme: 'exact',
-      network: params.network || finalConfig.network || 'base',
+      network: params.sourceNetwork || params.network || finalConfig.network || 'base',
       payload: {
         signature,
         authorization: {
@@ -194,7 +201,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     return { signature, x402Header };
   }, [address, isConnected, isPrivyUser, privySignTypedData, signTypedDataAsync, finalConfig]);
 
-  const verify = useCallback(async (params: PaymentParams): Promise<PaymentResult & { x402Header?: string; network?: string; priority?: string }> => {
+  const verify = useCallback(async (params: PaymentParams): Promise<PaymentResult & { x402Header?: string; sourceNetwork?: string; destinationNetwork?: string; priority?: string }> => {
     if (!finalConfig.apiKey) {
       const error = new Error('Onchain API key not provided');
       params.onError?.(error);
@@ -209,11 +216,14 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       finalConfig.callbacks.onVerificationStart?.();
 
       const { signature, x402Header } = await signPayment(params);
-      const network = params.network || finalConfig.network || 'base';
+      
+      // Determine source and destination networks
+      const sourceNetwork = params.sourceNetwork || params.network || finalConfig.network || 'base';
+      const destinationNetwork = params.destinationNetwork || params.network || finalConfig.network || 'base';
       const priority = params.priority || DEFAULT_PRIORITY;
 
       // Store state for potential settle call
-      setPaymentState({ signature, x402Header, network, priority });
+      setPaymentState({ signature, x402Header, sourceNetwork, destinationNetwork, priority });
 
       const verifyResponse = await fetch(`${finalConfig.apiUrl}/v1/verify`, {
         method: 'POST',
@@ -223,7 +233,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
         },
         body: JSON.stringify({
           paymentHeader: x402Header,
-          network,
+          sourceNetwork,
+          destinationNetwork,
           expectedAmount: params.amount,
           expectedToken: params.token?.symbol || finalConfig.token.symbol,
           recipientAddress: params.to,
@@ -239,7 +250,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       finalConfig.callbacks.onVerificationComplete?.();
 
       // Return the payment data for immediate settle
-      return { success: true, verified: true, x402Header, network, priority };
+      return { success: true, verified: true, x402Header, sourceNetwork, destinationNetwork, priority };
     } catch (error) {
       const err = error instanceof Error ? error : new Error('Unknown error');
       params.onError?.(err);
@@ -253,7 +264,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
   // Internal settle function that takes explicit parameters
   const settleInternal = useCallback(async (
     x402Header: string,
-    network: string,
+    sourceNetwork: string,
+    destinationNetwork: string,
     priority: string,
     params?: Partial<PaymentParams>
   ): Promise<PaymentResult> => {
@@ -277,7 +289,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
         },
         body: JSON.stringify({
           paymentHeader: x402Header,
-          network,
+          sourceNetwork,
+          destinationNetwork,
           priority,
         }),
       });
@@ -319,7 +332,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
 
     return settleInternal(
       paymentState.x402Header,
-      paymentState.network!,
+      paymentState.sourceNetwork!,
+      paymentState.destinationNetwork!,
       paymentState.priority!,
       params
     );
@@ -341,7 +355,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
         // Pass the x402Header directly instead of relying on state
         const settleResult = await settleInternal(
           verifyResult.x402Header!,
-          verifyResult.network!,
+          verifyResult.sourceNetwork!,
+          verifyResult.destinationNetwork!,
           verifyResult.priority!,
           params
         );

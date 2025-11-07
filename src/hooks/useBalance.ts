@@ -32,7 +32,7 @@ export function useBalance(config?: UseBalanceConfig): BalanceData {
 
   const { data, isLoading, isError, refetch } = useWagmiBalance({
     address: address as `0x${string}` | undefined,
-    token: token.address,
+    token: token.address as `0x${string}`,
   });
 
   const value = data?.value ?? 0n;
