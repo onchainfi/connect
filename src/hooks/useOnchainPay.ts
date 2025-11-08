@@ -388,18 +388,55 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       const sourceNetwork = params.sourceNetwork || params.network || finalConfig.network || 'base';
       const destinationNetwork = params.destinationNetwork || params.network || finalConfig.network || 'base';
       const priority = params.priority || DEFAULT_PRIORITY;
+      
+      // Check if this is a cross-chain payment
+      const isCrossChain = sourceNetwork !== destinationNetwork;
+      let recipientAddress = params.to;
+
+      // For cross-chain: Get ChangeNOW deposit address first
+      if (isCrossChain) {
+        const bridgePrepareResponse = await fetch(`${finalConfig.apiUrl}/v1/bridge/prepare`, {
+          method: 'POST',
+          headers: {
+            'X-API-Key': finalConfig.apiKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sourceNetwork,
+            destinationNetwork,
+            amount: params.amount,
+            recipientAddress: params.to,  // Final recipient on destination chain
+          }),
+        });
+
+        const bridgeData = await bridgePrepareResponse.json();
+        if (!bridgePrepareResponse.ok || bridgeData.status !== 'success') {
+          throw new Error(bridgeData.message || 'Cross-chain bridge preparation failed');
+        }
+
+        // Override recipient with ChangeNOW's deposit address
+        recipientAddress = bridgeData.data.depositAddress;
+        
+        console.log('🌉 Cross-chain payment detected:', {
+          originalRecipient: params.to,
+          bridgeDepositAddress: recipientAddress,
+          orderId: bridgeData.data.orderId,
+          sourceNetwork,
+          destinationNetwork,
+        });
+      }
 
       // Route to appropriate signing method based on source network
       let x402Header: string;
       let signature: string | undefined;
 
       if (isSolanaNetwork(sourceNetwork)) {
-        // Solana signing
-        const result = await signSolanaPayment({ ...params, sourceNetwork, destinationNetwork });
+        // Solana signing - use deposit address for cross-chain
+        const result = await signSolanaPayment({ ...params, to: recipientAddress, sourceNetwork, destinationNetwork });
         x402Header = result.x402Header;
       } else {
-        // EVM signing (EIP-712)
-        const result = await signPayment(params);
+        // EVM signing (EIP-712) - use deposit address for cross-chain
+        const result = await signPayment({ ...params, to: recipientAddress });
         x402Header = result.x402Header;
         signature = result.signature;
       }
@@ -419,7 +456,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
           destinationNetwork,
           expectedAmount: params.amount,
           expectedToken: params.token?.symbol || finalConfig.token.symbol,
-          recipientAddress: params.to,
+          recipientAddress: isCrossChain ? recipientAddress : params.to,  // Use deposit address for cross-chain
           priority,
         }),
       });
@@ -441,7 +478,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     } finally {
       setIsVerifying(false);
     }
-  }, [finalConfig, signPayment]);
+  }, [finalConfig, signPayment, signSolanaPayment]);
 
   // Internal settle function that takes explicit parameters
   const settleInternal = useCallback(async (
