@@ -393,7 +393,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       const isCrossChain = sourceNetwork !== destinationNetwork;
       let recipientAddress = params.to;
 
-      // For cross-chain: Get ChangeNOW deposit address first
+      // For cross-chain: Get CCTP adapter address first
+      let bridgeOrderId: string | undefined;
       if (isCrossChain) {
         const bridgePrepareResponse = await fetch(`${finalConfig.apiUrl}/v1/bridge/prepare`, {
           method: 'POST',
@@ -414,13 +415,14 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
           throw new Error(bridgeData.message || 'Cross-chain bridge preparation failed');
         }
 
-        // Override recipient with ChangeNOW's deposit address
+        // Override recipient with adapter address (or ChangeNOW deposit)
         recipientAddress = bridgeData.data.depositAddress;
+        bridgeOrderId = bridgeData.data.orderId; // Store for linking
         
         console.log('🌉 Cross-chain payment detected:', {
           originalRecipient: params.to,
-          bridgeDepositAddress: recipientAddress,
-          orderId: bridgeData.data.orderId,
+          adapterAddress: recipientAddress,
+          bridgeOrderId: bridgeOrderId,
           sourceNetwork,
           destinationNetwork,
         });
@@ -458,6 +460,7 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
           expectedToken: params.token?.symbol || finalConfig.token.symbol,
           recipientAddress: isCrossChain ? recipientAddress : params.to,  // Use deposit address for cross-chain
           priority,
+          ...(bridgeOrderId && { bridgeOrderId }), // Link to bridge order (critical!)
         }),
       });
 
