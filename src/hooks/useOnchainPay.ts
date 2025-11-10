@@ -142,8 +142,22 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     const amountBigInt = parseTokenAmount(amount, useToken.decimals);
 
     try {
+      console.log('[Solana x402] Starting payment construction', {
+        to,
+        amount,
+        isCrossChain,
+        sourceNetwork,
+        destinationNetwork,
+      });
+
       // Create Solana public keys
-      const userPubkey = new PublicKey(address);
+      let userPubkey: PublicKey;
+      try {
+        userPubkey = new PublicKey(address);
+        console.log('[Solana x402] User pubkey created:', userPubkey.toBase58());
+      } catch (error: any) {
+        throw new Error(`Invalid user address: ${address} - ${error.message}`);
+      }
       
       // For cross-chain: send to adapter PDA from API (CCTP adapter vault)
       // For same-chain: send directly to recipient
@@ -153,36 +167,85 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       if (isCrossChain) {
         // Cross-chain: Send to adapter PDA (from /bridge/prepare)
         // API returns the correct adapter address for source network
-        destination = new PublicKey(to); // Adapter PDA (e.g., Solana adapter for Sol→Base)
+        try {
+          destination = new PublicKey(to); // Adapter PDA (e.g., Solana adapter for Sol→Base)
+          console.log('[Solana x402] Cross-chain destination (adapter PDA):', destination.toBase58());
+        } catch (error: any) {
+          throw new Error(`Invalid adapter PDA address from API: ${to} - ${error.message}`);
+        }
         actualRecipient = params.to; // Original recipient (stored in payment state)
       } else {
         // Same-chain: Direct transfer to recipient
-        destination = new PublicKey(to);
+        try {
+          destination = new PublicKey(to);
+          console.log('[Solana x402] Same-chain destination:', destination.toBase58());
+        } catch (error: any) {
+          throw new Error(`Invalid recipient address: ${to} - ${error.message}`);
+        }
         actualRecipient = to;
       }
       
-      const mintPubkey = new PublicKey(useToken.address);
+      let mintPubkey: PublicKey;
+      try {
+        mintPubkey = new PublicKey(useToken.address);
+        console.log('[Solana x402] Mint pubkey:', mintPubkey.toBase58());
+      } catch (error: any) {
+        throw new Error(`Invalid token mint address: ${useToken.address} - ${error.message}`);
+      }
 
       // Get latest blockhash
-      const { blockhash } = await connection.getLatestBlockhash('confirmed');
+      let blockhash: string;
+      try {
+        const blockh = await connection.getLatestBlockhash('confirmed');
+        blockhash = blockh.blockhash;
+        console.log('[Solana x402] Got latest blockhash:', blockhash.slice(0, 8) + '...');
+      } catch (error: any) {
+        throw new Error(`Failed to get blockhash from Solana: ${error.message}`);
+      }
 
       // Determine token program (TOKEN vs TOKEN_2022)
-      const mintInfo = await connection.getAccountInfo(mintPubkey, 'confirmed');
-      const programId = mintInfo?.owner?.toBase58() === TOKEN_2022_PROGRAM_ID.toBase58()
-        ? TOKEN_2022_PROGRAM_ID
-        : TOKEN_PROGRAM_ID;
+      let programId: PublicKey;
+      try {
+        const mintInfo = await connection.getAccountInfo(mintPubkey, 'confirmed');
+        programId = mintInfo?.owner?.toBase58() === TOKEN_2022_PROGRAM_ID.toBase58()
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
+        console.log('[Solana x402] Token program:', programId.toBase58());
+      } catch (error: any) {
+        throw new Error(`Failed to fetch mint info: ${error.message}`);
+      }
 
       // Fetch mint to get decimals
-      const mint = await getMint(connection, mintPubkey, undefined, programId);
+      let mint: any;
+      try {
+        mint = await getMint(connection, mintPubkey, undefined, programId);
+        console.log('[Solana x402] Mint decimals:', mint.decimals);
+      } catch (error: any) {
+        throw new Error(`Failed to fetch mint: ${error.message}`);
+      }
 
       // Get associated token accounts
-      const sourceAta = await getAssociatedTokenAddress(mintPubkey, userPubkey, false, programId);
-      const destinationAta = await getAssociatedTokenAddress(mintPubkey, destination, false, programId);
+      let sourceAta: PublicKey;
+      let destinationAta: PublicKey;
+      try {
+        sourceAta = await getAssociatedTokenAddress(mintPubkey, userPubkey, false, programId);
+        destinationAta = await getAssociatedTokenAddress(mintPubkey, destination, false, programId);
+        console.log('[Solana x402] Source ATA:', sourceAta.toBase58());
+        console.log('[Solana x402] Destination ATA:', destinationAta.toBase58());
+      } catch (error: any) {
+        throw new Error(`Failed to derive token accounts: ${error.message}`);
+      }
 
       // Check if source ATA exists (user must have tokens)
-      const sourceAtaInfo = await connection.getAccountInfo(sourceAta, 'confirmed');
-      if (!sourceAtaInfo) {
-        throw new Error(`You don't have a ${useToken.symbol} token account. Please fund your Solana wallet with ${useToken.symbol} first.`);
+      try {
+        const sourceAtaInfo = await connection.getAccountInfo(sourceAta, 'confirmed');
+        if (!sourceAtaInfo) {
+          throw new Error(`You don't have a ${useToken.symbol} token account. Please fund your Solana wallet with ${useToken.symbol} first.`);
+        }
+        console.log('[Solana x402] Source ATA exists, balance check passed');
+      } catch (error: any) {
+        if (error.message.includes("don't have")) throw error;
+        throw new Error(`Failed to check source token account: ${error.message}`);
       }
 
       const instructions: TransactionInstruction[] = [];
@@ -200,32 +263,46 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
           microLamports: 1, // Minimal priority fee
         })
       );
+      console.log('[Solana x402] Added ComputeBudget instructions');
 
       // Check if destination ATA exists, create if needed
       // Facilitator will be the fee payer for ATA creation
-      const destAtaInfo = await connection.getAccountInfo(destinationAta, 'confirmed');
+      let destAtaInfo: any;
+      try {
+        destAtaInfo = await connection.getAccountInfo(destinationAta, 'confirmed');
+        console.log('[Solana x402] Destination ATA check:', destAtaInfo ? 'exists' : 'does not exist');
+      } catch (error: any) {
+        throw new Error(`Failed to check destination token account: ${error.message}`);
+      }
+      
       if (!destAtaInfo) {
+        console.log('[Solana x402] Creating ATA instruction for destination');
         const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
         
-        const createAtaInstruction = new TransactionInstruction({
-          keys: [
-            { pubkey: userPubkey, isSigner: false, isWritable: true }, // Fee payer (facilitator will replace)
-            { pubkey: destinationAta, isSigner: false, isWritable: true },
-            { pubkey: destination, isSigner: false, isWritable: false },
-            { pubkey: mintPubkey, isSigner: false, isWritable: false },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-            { pubkey: programId, isSigner: false, isWritable: false },
-          ],
-          programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-          data: Buffer.from([0]), // CreateATA discriminator
-        });
+        try {
+          const createAtaInstruction = new TransactionInstruction({
+            keys: [
+              { pubkey: userPubkey, isSigner: false, isWritable: true }, // Fee payer (facilitator will replace)
+              { pubkey: destinationAta, isSigner: false, isWritable: true },
+              { pubkey: destination, isSigner: false, isWritable: false },
+              { pubkey: mintPubkey, isSigner: false, isWritable: false },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+              { pubkey: programId, isSigner: false, isWritable: false },
+            ],
+            programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+            data: Buffer.from([0]), // CreateATA discriminator
+          });
 
-        instructions.push(createAtaInstruction);
+          instructions.push(createAtaInstruction);
+          console.log('[Solana x402] CreateATA instruction added');
+        } catch (error: any) {
+          throw new Error(`Failed to create ATA instruction: ${error.message}`);
+        }
       }
 
       // SPL token transfer instruction
-      instructions.push(
-        createTransferCheckedInstruction(
+      try {
+        const transferIx = createTransferCheckedInstruction(
           sourceAta,
           mintPubkey,
           destinationAta,
@@ -234,37 +311,67 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
           mint.decimals,
           [],
           programId
-        )
-      );
+        );
+        instructions.push(transferIx);
+        console.log('[Solana x402] Transfer instruction added:', {
+          from: sourceAta.toBase58(),
+          to: destinationAta.toBase58(),
+          amount: amountBigInt.toString(),
+          decimals: mint.decimals,
+        });
+      } catch (error: any) {
+        throw new Error(`Failed to create transfer instruction: ${error.message}`);
+      }
 
       // Create versioned transaction
       // Use PayAI's feePayer as transaction payer (they pay fees, not user)
       const PAYAI_FEE_PAYER = new PublicKey('2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4');
       
-      const message = new TransactionMessage({
-        payerKey: PAYAI_FEE_PAYER, // PayAI's fee payer (will co-sign and pay fees)
-        recentBlockhash: blockhash,
-        instructions,
-      }).compileToV0Message();
+      let transaction: VersionedTransaction;
+      try {
+        const message = new TransactionMessage({
+          payerKey: PAYAI_FEE_PAYER, // PayAI's fee payer (will co-sign and pay fees)
+          recentBlockhash: blockhash,
+          instructions,
+        }).compileToV0Message();
 
-      const transaction = new VersionedTransaction(message);
+        transaction = new VersionedTransaction(message);
+        console.log('[Solana x402] Transaction created with', instructions.length, 'instructions');
+      } catch (error: any) {
+        throw new Error(`Failed to build transaction: ${error.message}`);
+      }
 
       // Sign with user's wallet
       let signedTransaction: VersionedTransaction;
-
-      if (isPrivyUser && user?.wallet?.chainType === 'solana') {
-        // @ts-ignore - Privy Solana wallet
-        signedTransaction = await user.wallet.signTransaction(transaction);
-      } else if (solanaWallet.signTransaction) {
-        signedTransaction = await solanaWallet.signTransaction(transaction);
-      } else {
-        throw new Error('Solana wallet does not support transaction signing');
+      try {
+        console.log('[Solana x402] Requesting wallet signature...');
+        
+        if (isPrivyUser && user?.wallet?.chainType === 'solana') {
+          // @ts-ignore - Privy Solana wallet
+          signedTransaction = await user.wallet.signTransaction(transaction);
+          console.log('[Solana x402] Signed with Privy Solana wallet');
+        } else if (solanaWallet.signTransaction) {
+          signedTransaction = await solanaWallet.signTransaction(transaction);
+          console.log('[Solana x402] Signed with external Solana wallet');
+        } else {
+          throw new Error('Solana wallet does not support transaction signing');
+        }
+      } catch (error: any) {
+        // Wallet signing errors often have nested details
+        const errorMsg = error.message || error.toString?.() || 'Unknown signing error';
+        throw new Error(`Wallet signing failed: ${errorMsg}`);
       }
 
       finalConfig.callbacks.onSigningComplete?.();
 
       // Serialize partially-signed transaction
-      const serializedTransaction = Buffer.from(signedTransaction.serialize()).toString('base64');
+      let serializedTransaction: string;
+      try {
+        serializedTransaction = Buffer.from(signedTransaction.serialize()).toString('base64');
+        console.log('[Solana x402] Transaction serialized, length:', serializedTransaction.length);
+      } catch (error: any) {
+        throw new Error(`Failed to serialize transaction: ${error.message}`);
+      }
 
       // Create x402 payment header
       const payloadData: any = {
@@ -275,6 +382,10 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       if (isCrossChain) {
         payloadData.destinationNetwork = destinationNetwork;
         payloadData.destinationAddress = actualRecipient; // The final Base recipient
+        console.log('[Solana x402] Cross-chain metadata added:', {
+          destinationNetwork,
+          destinationAddress: actualRecipient,
+        });
       }
       
       const x402Header = btoa(JSON.stringify({
@@ -284,9 +395,19 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
         payload: payloadData,
       }));
 
+      console.log('[Solana x402] x402 header created successfully');
       return { x402Header };
     } catch (error: any) {
-      throw new Error(`Solana payment failed: ${error.message}`);
+      // Enhanced error logging
+      console.error('[Solana x402] ERROR:', error);
+      console.error('[Solana x402] Error details:', {
+        message: error.message,
+        stack: error.stack?.split('\n').slice(0, 3).join('\n'),
+        name: error.name,
+        code: (error as any).code,
+      });
+      
+      throw new Error(`Solana payment failed: ${error.message || error.toString?.() || 'Unknown error'}`);
     }
   }, [address, isConnected, isPrivyUser, user, solanaWallet, connection, finalConfig]);
 
@@ -423,6 +544,13 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       // For cross-chain: Get CCTP adapter address first
       let bridgeOrderId: string | undefined;
       if (isCrossChain) {
+        console.log('[Verify] Calling /bridge/prepare for cross-chain:', {
+          sourceNetwork,
+          destinationNetwork,
+          amount: params.amount,
+          recipientAddress: params.to,
+        });
+        
         const bridgePrepareResponse = await fetch(`${finalConfig.apiUrl}/v1/bridge/prepare`, {
           method: 'POST',
           headers: {
@@ -438,6 +566,8 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
         });
 
         const bridgeData = await bridgePrepareResponse.json();
+        console.log('[Verify] Bridge prepare response:', bridgeData);
+        
         if (!bridgePrepareResponse.ok || bridgeData.status !== 'success') {
           throw new Error(bridgeData.message || 'Cross-chain bridge preparation failed');
         }
@@ -461,13 +591,32 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
 
       if (isSolanaNetwork(sourceNetwork)) {
         // Solana signing - use deposit address for cross-chain
-        const result = await signSolanaPayment({ ...params, to: recipientAddress, sourceNetwork, destinationNetwork });
-        x402Header = result.x402Header;
+        console.log('[Verify] Calling signSolanaPayment with:', {
+          to: recipientAddress,
+          amount: params.amount,
+          sourceNetwork,
+          destinationNetwork,
+        });
+        
+        try {
+          const result = await signSolanaPayment({ ...params, to: recipientAddress, sourceNetwork, destinationNetwork });
+          x402Header = result.x402Header;
+          console.log('[Verify] Solana signing successful, header length:', x402Header.length);
+        } catch (error: any) {
+          console.error('[Verify] Solana signing failed:', error);
+          throw error; // Re-throw with original error message
+        }
       } else {
         // EVM signing (EIP-712) - use deposit address for cross-chain
+        console.log('[Verify] Calling signPayment (EVM) with:', {
+          to: recipientAddress,
+          amount: params.amount,
+        });
+        
         const result = await signPayment({ ...params, to: recipientAddress });
         x402Header = result.x402Header;
         signature = result.signature;
+        console.log('[Verify] EVM signing successful');
       }
 
       // Store state for potential settle call
