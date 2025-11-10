@@ -125,7 +125,10 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       throw new Error('Solana wallet not connected');
     }
 
-    const { to, amount, token: paramToken, sourceNetwork } = params;
+    const { to, amount, token: paramToken, sourceNetwork, destinationNetwork } = params;
+    
+    // Determine if this is a cross-chain payment
+    const isCrossChain = sourceNetwork && destinationNetwork && sourceNetwork !== destinationNetwork;
     
     // Get correct token config for Solana network
     const { SUPPORTED_CHAINS } = await import('../config/chains');
@@ -141,7 +144,24 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
     try {
       // Create Solana public keys
       const userPubkey = new PublicKey(address);
-      const destination = new PublicKey(to);
+      
+      // For cross-chain: send to backend wallet (they'll handle CCTP burn)
+      // For same-chain: send directly to recipient
+      let destination: PublicKey;
+      let actualRecipient: string;
+      
+      if (isCrossChain) {
+        // Cross-chain: Use backend Solana wallet as intermediate recipient
+        // The final Base/EVM recipient goes in metadata
+        const BACKEND_SOLANA_WALLET = 'BCzJcAkixVMyQGiXPbep4d7Vnu3tnXLu5gWoJyyLQ2jo';
+        destination = new PublicKey(BACKEND_SOLANA_WALLET);
+        actualRecipient = to; // Store final recipient for backend
+      } else {
+        // Same-chain: Direct transfer to recipient
+        destination = new PublicKey(to);
+        actualRecipient = to;
+      }
+      
       const mintPubkey = new PublicKey(useToken.address);
 
       // Get latest blockhash
@@ -248,13 +268,21 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       const serializedTransaction = Buffer.from(signedTransaction.serialize()).toString('base64');
 
       // Create x402 payment header
+      const payloadData: any = {
+        transaction: serializedTransaction,
+      };
+      
+      // For cross-chain payments, include destination info
+      if (isCrossChain) {
+        payloadData.destinationNetwork = destinationNetwork;
+        payloadData.destinationAddress = actualRecipient; // The final Base recipient
+      }
+      
       const x402Header = btoa(JSON.stringify({
         x402Version: 1,
         scheme: 'exact',
         network: params.sourceNetwork || 'solana',
-        payload: {
-          transaction: serializedTransaction,
-        },
+        payload: payloadData,
       }));
 
       return { x402Header };
