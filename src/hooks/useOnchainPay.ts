@@ -145,17 +145,16 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       // Create Solana public keys
       const userPubkey = new PublicKey(address);
       
-      // For cross-chain: send to backend wallet (they'll handle CCTP burn)
+      // For cross-chain: send to adapter PDA from API (CCTP adapter vault)
       // For same-chain: send directly to recipient
       let destination: PublicKey;
       let actualRecipient: string;
       
       if (isCrossChain) {
-        // Cross-chain: Use backend Solana wallet as intermediate recipient
-        // The final Base/EVM recipient goes in metadata
-        const BACKEND_SOLANA_WALLET = 'BCzJcAkixVMyQGiXPbep4d7Vnu3tnXLu5gWoJyyLQ2jo';
-        destination = new PublicKey(BACKEND_SOLANA_WALLET);
-        actualRecipient = to; // Store final recipient for backend
+        // Cross-chain: Send to adapter PDA (from /bridge/prepare)
+        // API returns the correct adapter address for source network
+        destination = new PublicKey(to); // Adapter PDA (e.g., Solana adapter for Sol→Base)
+        actualRecipient = params.to; // Original recipient (stored in payment state)
       } else {
         // Same-chain: Direct transfer to recipient
         destination = new PublicKey(to);
