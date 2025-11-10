@@ -229,11 +229,23 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
       let destinationAta: PublicKey;
       try {
         sourceAta = await getAssociatedTokenAddress(mintPubkey, userPubkey, false, programId);
-        destinationAta = await getAssociatedTokenAddress(mintPubkey, destination, false, programId);
         console.log('[Solana x402] Source ATA:', sourceAta.toBase58());
+        
+        // For cross-chain, destination is a PDA (off-curve), need allowOwnerOffCurve: true
+        destinationAta = await getAssociatedTokenAddress(mintPubkey, destination, true, programId);
         console.log('[Solana x402] Destination ATA:', destinationAta.toBase58());
       } catch (error: any) {
-        throw new Error(`Failed to derive token accounts: ${error.message}`);
+        const errorMsg = error?.message || error?.toString?.() || JSON.stringify(error);
+        console.error('[Solana x402] getAssociatedTokenAddress failed:', {
+          error,
+          errorType: typeof error,
+          errorMessage: errorMsg,
+          mintPubkey: mintPubkey.toBase58(),
+          userPubkey: userPubkey.toBase58(),
+          destination: destination.toBase58(),
+          programId: programId.toBase58(),
+        });
+        throw new Error(`Failed to derive token accounts: ${errorMsg}`);
       }
 
       // Check if source ATA exists (user must have tokens)
