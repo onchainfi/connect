@@ -581,7 +581,14 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
         console.log('[Verify] Bridge prepare response:', bridgeData);
         
         if (!bridgePrepareResponse.ok || bridgeData.status !== 'success') {
-          throw new Error(bridgeData.message || 'Cross-chain bridge preparation failed');
+          // Handle both error formats:
+          // 1. New format (middleware): { status: 'error', error: { code, message, hint } }
+          // 2. Old format: { status: 'error', message: '...' }
+          const errorMessage = bridgeData.error?.message || bridgeData.message || 'Crosschain bridge preparation failed';
+          const errorHint = bridgeData.error?.hint || '';
+          const fullMessage = errorHint ? `${errorMessage} ${errorHint}` : errorMessage;
+          
+          throw new Error(fullMessage);
         }
 
         // Override recipient with adapter address (or ChangeNOW deposit)
@@ -654,7 +661,12 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
 
       const verifyData = await verifyResponse.json();
       if (!verifyResponse.ok || verifyData.status !== 'success' || !verifyData.data?.valid) {
-        throw new Error(verifyData.data?.reason || 'Payment verification failed');
+        // Handle detailed error format from feature flags
+        const errorMessage = verifyData.error?.message || verifyData.message || verifyData.data?.reason || 'Payment verification failed';
+        const errorHint = verifyData.error?.hint || '';
+        const fullMessage = errorHint ? `${errorMessage} ${errorHint}` : errorMessage;
+        
+        throw new Error(fullMessage);
       }
 
       finalConfig.callbacks.onVerificationComplete?.();
@@ -707,7 +719,12 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
 
       const settleData = await settleResponse.json();
       if (!settleResponse.ok || settleData.status !== 'success' || !settleData.data?.settled) {
-        throw new Error(settleData.data?.reason || 'Payment settlement failed');
+        // Handle detailed error format from feature flags
+        const errorMessage = settleData.error?.message || settleData.message || settleData.data?.reason || 'Payment settlement failed';
+        const errorHint = settleData.error?.hint || '';
+        const fullMessage = errorHint ? `${errorMessage} ${errorHint}` : errorMessage;
+        
+        throw new Error(fullMessage);
       }
 
       const txHash = settleData.data.txHash || '';

@@ -1,6 +1,6 @@
 {
   "name": "@onchainfi/connect",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Complete wallet authentication and x402 payment SDK with multi-chain support (EVM + Solana), pre-built UI components, and zero-config setup",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
