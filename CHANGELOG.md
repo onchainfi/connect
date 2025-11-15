@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.0] - 2025-11-15
+
+### ✨ New Features
+
+#### Dynamic Solana Facilitator Selection
+- **Smart routing** for Solana payments based on real-time rankings
+- Calls `/v1/facilitators/ranked` API to select optimal facilitator
+- Respects priority parameter (speed, cost, reliability, balanced)
+- Supports multiple Solana facilitators: PayAI, Anyspend, OctonetAI, Aurracloud
+
+#### Solana Fee Payer Configuration
+- New `src/config/solana.ts` configuration file
+- Maps facilitator names to their fee payer addresses
+- Enables multi-facilitator support with proper fee sponsorship
+- Synced with backend facilitator configurations
+
+### 🔄 Enhanced Features
+
+#### `useOnchainPay()` Hook
+- **Before:** Hardcoded PayAI fee payer for all Solana transactions
+- **After:** Dynamically selects best facilitator based on rankings
+- Automatically uses correct fee payer for selected facilitator
+- Better reliability through smart routing and failover
+
+### 🎯 Benefits
+- **Improved reliability:** Automatic failover if primary facilitator is down
+- **Better performance:** Routes to fastest facilitator based on real-time data
+- **Cost optimization:** Can route to cheapest facilitator when priority=cost
+- **Multi-facilitator support:** No longer locked to single facilitator
+
+### 📦 Package Updates
+- Version bumped from 2.4.0 to 2.5.0
+- Fully backwards compatible (existing code works unchanged)
+
+---
+
 ## [1.0.0] - 2025-11-04
 
 ### 🎉 Major Release - Complete Refactor

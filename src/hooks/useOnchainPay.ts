@@ -335,14 +335,48 @@ export function useOnchainPay(config?: UseOnchainPayConfig) {
         throw new Error(`Failed to create transfer instruction: ${error.message}`);
       }
 
-      // Create versioned transaction
-      // Use PayAI's feePayer as transaction payer (they pay fees, not user)
-      const PAYAI_FEE_PAYER = new PublicKey('2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4');
+      // Get optimal facilitator from backend rankings
+      const priority = params.priority || 'balanced';
+      let topFacilitatorName: string;
       
+      try {
+        const rankedResponse = await fetch(
+          `${globalConfig.apiUrl}/v1/facilitators/ranked?network=solana&priority=${priority}`,
+          {
+            headers: {
+              'X-API-Key': globalConfig.apiKey || '',
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        
+        if (!rankedResponse.ok) {
+          throw new Error(`Failed to get facilitator rankings: ${rankedResponse.status}`);
+        }
+        
+        const rankedData = await rankedResponse.json();
+        topFacilitatorName = rankedData.data?.facilitators?.[0]?.facilitatorName;
+        
+        if (!topFacilitatorName) {
+          throw new Error('No Solana facilitators available');
+        }
+        
+        console.log('[Solana x402] Top ranked facilitator:', topFacilitatorName);
+      } catch (error: any) {
+        throw new Error(`Facilitator selection failed: ${error.message}`);
+      }
+      
+      // Get fee payer for selected facilitator
+      const { getSolanaFeePayer } = await import('../config/solana');
+      const feePayerAddress = getSolanaFeePayer(topFacilitatorName);
+      const feePayer = new PublicKey(feePayerAddress);
+      console.log('[Solana x402] Using fee payer:', feePayerAddress);
+      
+      // Create versioned transaction with selected facilitator's fee payer
       let transaction: VersionedTransaction;
       try {
         const message = new TransactionMessage({
-          payerKey: PAYAI_FEE_PAYER, // PayAI's fee payer (will co-sign and pay fees)
+          payerKey: feePayer, // Selected facilitator will co-sign and pay fees
           recentBlockhash: blockhash,
           instructions,
         }).compileToV0Message();
