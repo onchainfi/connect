@@ -1,0 +1,367 @@
+import { useState, useCallback } from 'react';
+import { useSignTypedData, useChainId } from 'wagmi';
+import { usePrivy } from '@privy-io/react-auth';
+import { useOnchainWallet } from './useOnchainWallet';
+import { useOnchainConfig } from '../context/OnchainConfigContext';
+import type { UseOnchainPayConfig } from '../types/config';
+import { DEFAULT_PRIORITY } from '../config/defaults';
+import { verifyPayment, settlePayment, prepareBridge } from './shared/api';
+import { validateAmount, generateNonce, getValidityTimestamps } from './shared/validation';
+import type { PaymentParams, PaymentResult } from './useOnchainPay';
+
+interface PaymentState {
+  signature?: string;
+  x402Header?: string;
+  sourceNetwork?: string;
+  destinationNetwork?: string;
+  priority?: string;
+}
+
+/**
+ * EVM-specific payment hook using EIP-712 signatures
+ * Supports Base, Optimism, Arbitrum, and other EVM chains
+ */
+export function useEvmPay(config?: UseOnchainPayConfig) {
+  const globalConfig = useOnchainConfig();
+  const { address, isConnected, isPrivyUser } = useOnchainWallet();
+  const { signTypedData: privySignTypedData } = usePrivy();
+  const { signTypedDataAsync } = useSignTypedData();
+  const currentChainId = useChainId();
+
+  // State
+  const [isPaying, setIsPaying] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [isSettling, setIsSettling] = useState(false);
+  const [lastTxHash, setLastTxHash] = useState<string>();
+  const [error, setError] = useState<Error>();
+  const [paymentState, setPaymentState] = useState<PaymentState>({});
+
+  // Merge config with global config
+  const finalConfig = {
+    apiKey: config?.apiKey || globalConfig.apiKey,
+    apiUrl: config?.apiUrl || globalConfig.apiUrl,
+    network: config?.network,
+    chainId: config?.chainId || currentChainId,
+    token: config?.token || globalConfig.defaultToken,
+    autoVerify: config?.autoVerify ?? true,
+    autoSettle: config?.autoSettle ?? true,
+    retryOnFail: config?.retryOnFail ?? false,
+    maxRetries: config?.maxRetries ?? 0,
+    callbacks: config?.callbacks || {},
+  };
+
+  const reset = useCallback(() => {
+    setIsPaying(false);
+    setIsVerifying(false);
+    setIsSettling(false);
+    setLastTxHash(undefined);
+    setError(undefined);
+    setPaymentState({});
+  }, []);
+
+  /**
+   * Sign an EVM payment using EIP-712
+   */
+  const signPayment = useCallback(async (params: PaymentParams): Promise<{ signature: string; x402Header: string }> => {
+    if (!isConnected || !address) {
+      throw new Error('Wallet not connected');
+    }
+
+    const { to, amount, chainId: paramChainId, token: paramToken } = params;
+    const useChainId = paramChainId || finalConfig.chainId;
+    const useToken = paramToken || finalConfig.token;
+
+    // Callbacks
+    finalConfig.callbacks.onSigningStart?.();
+
+    // Parse amount to token atomic units
+    const amountBigInt = validateAmount(amount, useToken.decimals);
+    const { validAfter, validBefore } = getValidityTimestamps();
+
+    // Generate random nonce
+    const nonce = generateNonce();
+
+    // EIP-712 domain
+    const domain = {
+      name: useToken.name || 'USD Coin',
+      version: '2',
+      chainId: useChainId,
+      verifyingContract: useToken.address as `0x${string}`,
+    };
+
+    const types = {
+      TransferWithAuthorization: [
+        { name: 'from', type: 'address' },
+        { name: 'to', type: 'address' },
+        { name: 'value', type: 'uint256' },
+        { name: 'validAfter', type: 'uint256' },
+        { name: 'validBefore', type: 'uint256' },
+        { name: 'nonce', type: 'bytes32' },
+      ],
+    };
+
+    // Sign payment
+    let signature: string;
+
+    if (isPrivyUser && privySignTypedData) {
+      // Privy requires string values
+      const privyMessage = {
+        from: address as `0x${string}`,
+        to: to as `0x${string}`,
+        value: amountBigInt.toString(),
+        validAfter: validAfter.toString(),
+        validBefore: validBefore.toString(),
+        nonce: nonce as `0x${string}`,
+      };
+
+      const result = await privySignTypedData({
+        domain,
+        types,
+        primaryType: 'TransferWithAuthorization',
+        message: privyMessage,
+      });
+      signature = result.signature;
+    } else {
+      // Wagmi supports BigInt values
+      const value = {
+        from: address as `0x${string}`,
+        to: to as `0x${string}`,
+        value: amountBigInt,
+        validAfter: BigInt(validAfter),
+        validBefore: BigInt(validBefore),
+        nonce: nonce as `0x${string}`,
+      };
+
+      signature = await signTypedDataAsync({
+        domain,
+        types,
+        primaryType: 'TransferWithAuthorization',
+        message: value,
+      });
+    }
+
+    finalConfig.callbacks.onSigningComplete?.();
+
+    // Create x402 payment header
+    const x402Header = btoa(JSON.stringify({
+      x402Version: 1,
+      scheme: 'exact',
+      network: params.sourceNetwork || params.network || finalConfig.network || 'base',
+      payload: {
+        signature,
+        authorization: {
+          from: address,
+          to,
+          value: amountBigInt.toString(),
+          validAfter: validAfter.toString(),
+          validBefore: validBefore.toString(),
+          nonce,
+        },
+      },
+    }));
+
+    return { signature, x402Header };
+  }, [address, isConnected, isPrivyUser, privySignTypedData, signTypedDataAsync, finalConfig]);
+
+  const verify = useCallback(async (params: PaymentParams): Promise<PaymentResult & { x402Header?: string; sourceNetwork?: string; destinationNetwork?: string; priority?: string }> => {
+    if (!finalConfig.apiKey) {
+      const error = new Error('Onchain API key not provided');
+      params.onError?.(error);
+      setError(error);
+      return { success: false, error: error.message };
+    }
+
+    setIsVerifying(true);
+    setError(undefined);
+
+    try {
+      finalConfig.callbacks.onVerificationStart?.();
+
+      // Determine source and destination networks
+      const sourceNetwork = params.sourceNetwork || params.network || finalConfig.network || 'base';
+      const destinationNetwork = params.destinationNetwork || params.network || finalConfig.network || 'base';
+      const priority = params.priority || DEFAULT_PRIORITY;
+      
+      // Check if this is a cross-chain payment
+      const isCrossChain = sourceNetwork !== destinationNetwork;
+      let recipientAddress = params.to;
+      let bridgeOrderId: string | undefined;
+
+      // For cross-chain: Get CCTP adapter address first
+      if (isCrossChain) {
+        const bridgeData = await prepareBridge({
+          apiUrl: finalConfig.apiUrl,
+          apiKey: finalConfig.apiKey,
+          sourceNetwork,
+          destinationNetwork,
+          amount: params.amount,
+          recipientAddress: params.to,
+        });
+
+        recipientAddress = bridgeData.depositAddress;
+        bridgeOrderId = bridgeData.orderId;
+        
+        console.log('🌉 Cross-chain payment detected:', {
+          originalRecipient: params.to,
+          adapterAddress: recipientAddress,
+          bridgeOrderId: bridgeOrderId,
+          sourceNetwork,
+          destinationNetwork,
+        });
+      }
+
+      // EVM signing (EIP-712)
+      console.log('[Verify] Calling signPayment (EVM) with:', {
+        to: recipientAddress,
+        amount: params.amount,
+      });
+      
+      const { x402Header, signature } = await signPayment({ ...params, to: recipientAddress });
+      console.log('[Verify] EVM signing successful');
+
+      // Store state for potential settle call
+      setPaymentState({ signature, x402Header, sourceNetwork, destinationNetwork, priority });
+
+      await verifyPayment({
+        apiUrl: finalConfig.apiUrl,
+        apiKey: finalConfig.apiKey,
+        paymentHeader: x402Header,
+        sourceNetwork,
+        destinationNetwork,
+        expectedAmount: params.amount,
+        expectedToken: params.token?.symbol || finalConfig.token.symbol,
+        recipientAddress: isCrossChain ? recipientAddress : params.to,
+        priority,
+        bridgeOrderId,
+      });
+
+      finalConfig.callbacks.onVerificationComplete?.();
+
+      // Return the payment data for immediate settle
+      return { success: true, verified: true, x402Header, sourceNetwork, destinationNetwork, priority };
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error('Unknown error');
+      params.onError?.(err);
+      setError(err);
+      return { success: false, error: err.message };
+    } finally {
+      setIsVerifying(false);
+    }
+  }, [finalConfig, signPayment]);
+
+  // Internal settle function that takes explicit parameters
+  const settleInternal = useCallback(async (
+    x402Header: string,
+    sourceNetwork: string,
+    destinationNetwork: string,
+    priority: string,
+    params?: Partial<PaymentParams>
+  ): Promise<PaymentResult> => {
+    if (!finalConfig.apiKey) {
+      const error = new Error('Onchain API key not provided');
+      setError(error);
+      return { success: false, error: error.message };
+    }
+
+    setIsSettling(true);
+    setError(undefined);
+
+    try {
+      finalConfig.callbacks.onSettlementStart?.();
+
+      const data = await settlePayment({
+        apiUrl: finalConfig.apiUrl,
+        apiKey: finalConfig.apiKey,
+        paymentHeader: x402Header,
+        sourceNetwork,
+        destinationNetwork,
+        priority,
+      });
+
+      const txHash = data.data.txHash || '';
+      setLastTxHash(txHash);
+
+      finalConfig.callbacks.onSettlementComplete?.();
+      params?.onSuccess?.(txHash);
+
+      return { success: true, txHash, settled: true };
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error('Unknown error');
+      params?.onError?.(err);
+      setError(err);
+      return { success: false, error: err.message };
+    } finally {
+      setIsSettling(false);
+    }
+  }, [finalConfig]);
+
+  const settle = useCallback(async (params?: Partial<PaymentParams>): Promise<PaymentResult> => {
+    if (!finalConfig.apiKey) {
+      const error = new Error('Onchain API key not provided');
+      setError(error);
+      return { success: false, error: error.message };
+    }
+
+    if (!paymentState.x402Header) {
+      const error = new Error('No payment to settle. Call verify() first.');
+      setError(error);
+      return { success: false, error: error.message };
+    }
+
+    return settleInternal(
+      paymentState.x402Header,
+      paymentState.sourceNetwork!,
+      paymentState.destinationNetwork!,
+      paymentState.priority!,
+      params
+    );
+  }, [finalConfig, paymentState, settleInternal]);
+
+  const pay = useCallback(async (params: PaymentParams): Promise<PaymentResult> => {
+    setIsPaying(true);
+    setError(undefined);
+
+    try {
+      // Verify
+      const verifyResult = await verify(params);
+      if (!verifyResult.success) {
+        return verifyResult;
+      }
+
+      // Auto-settle if enabled
+      if (finalConfig.autoSettle) {
+        const settleResult = await settleInternal(
+          verifyResult.x402Header!,
+          verifyResult.sourceNetwork!,
+          verifyResult.destinationNetwork!,
+          verifyResult.priority!,
+          params
+        );
+        return settleResult;
+      }
+
+      return verifyResult;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error('Unknown error');
+      params.onError?.(err);
+      setError(err);
+      return { success: false, error: err.message };
+    } finally {
+      setIsPaying(false);
+    }
+  }, [verify, finalConfig.autoSettle, settleInternal]);
+
+  return {
+    pay,
+    verify,
+    settle,
+    isPaying,
+    isVerifying,
+    isSettling,
+    isReady: isConnected && !!finalConfig.apiKey,
+    lastTxHash,
+    error,
+    reset,
+  };
+}
+

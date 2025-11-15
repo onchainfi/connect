@@ -2,6 +2,129 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.0] - 2025-11-16
+
+### 🎉 Major Architectural Refactor - Separate EVM and Solana Hooks
+
+This release completely refactors the payment hook architecture to cleanly separate EVM and Solana implementations, eliminating the "chainId mismatch viem" error and setting the foundation for scalable multi-chain support.
+
+### 🏗️ Architecture Changes
+
+#### Hook Separation
+- **`useEvmPay()`** - New EVM-specific hook (Base, Optimism, Arbitrum, etc.)
+  - Uses wagmi/viem exclusively
+  - EIP-712 signing
+  - No Solana dependencies loaded
+- **`useSolanaPay()`** - New Solana-specific hook
+  - Uses Solana wallet adapters exclusively
+  - Solana transaction construction
+  - No wagmi/viem dependencies loaded
+- **`useOnchainPay()`** - Smart router
+  - Delegates to appropriate implementation based on `chainType`
+  - **100% backwards compatible** - Same API, same behavior
+  - Both hooks called unconditionally (React rules), but only relevant one active
+
+#### Shared Utilities
+- **`hooks/shared/api.ts`** - Shared API functions
+  - `verifyPayment()`, `settlePayment()`
+  - `prepareBridge()` for cross-chain
+  - `getRankedFacilitators()` for Solana
+- **`hooks/shared/validation.ts`** - Shared validation
+  - `validateAmount()`, `validateAddress()`
+  - `generateNonce()`, `getValidityTimestamps()`
+
+### 🐛 Bug Fixes
+
+#### Critical: Viem ChainId Error
+- **Issue:** "json is not a valid chainId object. details: chainId mismatch viem"
+- **Root Cause:** wagmi's `useChainId()` hook running for Solana users with no valid EVM chain
+- **Solution:** Separate hooks ensure wagmi hooks only run when EVM wallet is active
+- **Impact:** Solana payments now work without EVM chain errors
+
+### ✨ Benefits
+
+#### Code Organization
+- **Before:** 867-line monolithic `useOnchainPay.ts`
+- **After:** Clean separation across 6 files
+  - `useOnchainPay.ts` - 70 lines (router only)
+  - `useEvmPay.ts` - 368 lines (EVM logic)
+  - `useSolanaPay.ts` - 606 lines (Solana logic)
+  - `shared/api.ts` - 160 lines (shared API)
+  - `shared/validation.ts` - 45 lines (shared utils)
+
+#### Maintainability
+- Each hook focuses on single responsibility
+- Easier to debug (clear error scoping)
+- Easier to test (isolated logic)
+- Easier to extend (add new chains without touching existing code)
+
+#### Performance
+- Only relevant chain libraries loaded during execution
+- No cross-contamination between EVM and Solana state
+- Cleaner stack traces
+- Better error messages
+
+#### Scalability
+- Adding new chains (Bitcoin, Cosmos, etc.) follows clean pattern
+- Each chain gets its own specialized hook
+- Router delegates to appropriate implementation
+- No risk of one chain affecting another
+
+### 🔄 API Stability
+
+**100% Backwards Compatible** - No breaking changes:
+
+```tsx
+// Existing code works identically
+const { pay, verify, settle } = useOnchainPay();
+await pay({ to: '0x...', amount: '0.10' });
+```
+
+### 📦 New Exports
+
+Optional specialized hooks for advanced use cases:
+
+```tsx
+import { useEvmPay, useSolanaPay } from '@onchainfi/connect';
+
+// Force EVM payment flow
+const evmPay = useEvmPay();
+
+// Force Solana payment flow
+const solanaPay = useSolanaPay();
+```
+
+### 🚀 Migration Guide
+
+**No migration needed** - Existing code continues to work without changes.
+
+For those who want to use specialized hooks directly:
+- Replace `useOnchainPay()` with `useEvmPay()` for EVM-only apps
+- Replace `useOnchainPay()` with `useSolanaPay()` for Solana-only apps
+- Keep `useOnchainPay()` for multi-chain support (recommended)
+
+### 🎯 Future-Proofing
+
+This architecture enables:
+- Easy addition of new chains (Bitcoin, Cosmos, NEAR, etc.)
+- Chain-specific optimizations without affecting others
+- Independent testing and versioning per chain
+- Clearer error messages and debugging
+
+### 📝 Version Jump Rationale
+
+**2.5.0 → 3.0.0** (Major version bump)
+
+While the changes are 100% backwards compatible in API, this is a major architectural refactor that:
+- Restructures internal implementation significantly
+- Splits monolithic hook into modular architecture
+- Changes how dependencies are loaded at runtime
+- Sets foundation for future multi-chain expansion
+
+Developers using the package see no breaking changes, but the internal architecture is fundamentally different.
+
+---
+
 ## [2.5.0] - 2025-11-15
 
 ### ✨ New Features
