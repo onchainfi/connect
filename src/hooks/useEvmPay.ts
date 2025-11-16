@@ -67,9 +67,25 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
       throw new Error('Wallet not connected');
     }
 
-    const { to, amount, chainId: paramChainId, token: paramToken } = params;
+    const { to, amount, chainId: paramChainId, token: paramToken, sourceNetwork } = params;
     const useChainId = paramChainId || finalConfig.chainId;
     const useToken = paramToken || finalConfig.token;
+
+    // CRITICAL: Pre-flight chain validation
+    // Ensure wallet's actual chain matches the intended source network
+    if (sourceNetwork) {
+      const expectedChainId = sourceNetwork === 'base' ? 8453 : undefined;
+      
+      if (expectedChainId && currentChainId !== expectedChainId) {
+        const errorMsg = `Chain mismatch: Wallet is on chain ${currentChainId}, but payment requires chain ${expectedChainId} (${sourceNetwork}). Please switch networks in your wallet.`;
+        console.error('[useEvmPay] ❌ Pre-flight validation failed:', {
+          currentChainId,
+          expectedChainId,
+          sourceNetwork,
+        });
+        throw new Error(errorMsg);
+      }
+    }
 
     // Callbacks
     finalConfig.callbacks.onSigningStart?.();
@@ -80,6 +96,15 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
 
     // Generate random nonce
     const nonce = generateNonce();
+
+    // Log payment construction
+    console.log('[useEvmPay] 💳 Constructing EIP-712 signature:', {
+      chainId: useChainId,
+      sourceNetwork: sourceNetwork || 'not specified',
+      token: useToken.symbol,
+      amount,
+      to: to.slice(0, 6) + '...' + to.slice(-4),
+    });
 
     // EIP-712 domain
     const domain = {

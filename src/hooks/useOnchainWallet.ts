@@ -21,6 +21,9 @@ export interface OnchainWallet {
   /** Network name (e.g., 'base', 'solana') */
   network: string;
   
+  /** Active EVM chain ID (undefined for Solana wallets) */
+  chainId: number | undefined;
+  
   /** Privy user object (if authenticated via Privy) */
   user: any;
   
@@ -36,7 +39,7 @@ export interface OnchainWallet {
  * Supports both EVM (wagmi) and Solana wallet adapters
  */
 export function useOnchainWallet(): OnchainWallet {
-  const { address: wagmiAddress, isConnected: wagmiConnected } = useAccount();
+  const { address: wagmiAddress, isConnected: wagmiConnected, chainId: wagmiChainId } = useAccount();
   const { authenticated, user, login, logout } = usePrivy();
   const solanaWallet = useSolanaWallet();
 
@@ -49,6 +52,7 @@ export function useOnchainWallet(): OnchainWallet {
   let chainType: 'evm' | 'solana';
   let network: string;
   let isExternalWallet: boolean;
+  let chainId: number | undefined;
 
   if (hasSolanaWallet) {
     // External Solana wallet (Phantom, Solflare, etc.)
@@ -56,18 +60,44 @@ export function useOnchainWallet(): OnchainWallet {
     chainType = 'solana';
     network = 'solana';
     isExternalWallet = true;
+    chainId = undefined; // Solana doesn't have chainId concept
   } else if (hasPrivySolanaWallet) {
     // Privy embedded Solana wallet
     address = user?.wallet?.address;
     chainType = 'solana';
     network = 'solana';
     isExternalWallet = false;
+    chainId = undefined; // Solana doesn't have chainId concept
   } else {
     // EVM wallet (Privy or external)
     address = user?.wallet?.address || wagmiAddress;
     chainType = 'evm';
-    network = 'base'; // Default, can be enhanced to detect actual chain
+    chainId = wagmiChainId; // CRITICAL: Expose actual chain ID from wallet
+    
+    // Detect network from chainId
+    if (chainId === 8453) {
+      network = 'base';
+    } else if (chainId === 1) {
+      network = 'ethereum';
+    } else if (chainId === 10) {
+      network = 'optimism';
+    } else if (chainId === 42161) {
+      network = 'arbitrum';
+    } else {
+      network = chainId ? `chain-${chainId}` : 'unknown';
+    }
+    
     isExternalWallet = wagmiConnected && !authenticated;
+    
+    // Log wallet state for debugging
+    if (chainId) {
+      console.log('[useOnchainWallet] EVM wallet detected:', {
+        address: address?.slice(0, 6) + '...' + address?.slice(-4),
+        chainId,
+        network,
+        isExternalWallet,
+      });
+    }
   }
 
   const isConnected = hasSolanaWallet || authenticated || wagmiConnected;
@@ -79,6 +109,7 @@ export function useOnchainWallet(): OnchainWallet {
     isExternalWallet,
     chainType,
     network,
+    chainId,
     user,
     login,
     logout: hasSolanaWallet ? () => solanaWallet.disconnect() : logout,

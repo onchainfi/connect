@@ -24,6 +24,9 @@ export type { OnchainWallet } from './hooks/useOnchainWallet';
 export { useOnchainPay } from './hooks/useOnchainPay';
 export type { PaymentParams, PaymentResult } from './hooks/useOnchainPay';
 
+export { useChainAlignment } from './hooks/useChainAlignment';
+export type { ChainAlignmentState } from './hooks/useChainAlignment';
+
 // Advanced: Chain-specific payment hooks (optional)
 export { useEvmPay } from './hooks/useEvmPay';
 export { useSolanaPay } from './hooks/useSolanaPay';
