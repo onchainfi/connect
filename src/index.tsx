@@ -65,6 +65,7 @@ export type {
 // ===== Config & Utilities =====
 export { SUPPORTED_CHAINS, getTokenAddress, getTokenConfig, getChainConfig, getChainConfigByName, isSolanaNetwork, getExplorerUrl } from './config/chains';
 export { COMMON_TOKENS, formatTokenAmount, parseTokenAmount } from './config/tokens';
+export { CHAIN_ID_TO_NAME, getChainName, isKnownChain } from './config/chainNames';
 export { 
   DEFAULT_API_URL, 
   DEFAULT_CHAIN, 

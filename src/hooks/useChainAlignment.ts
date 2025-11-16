@@ -1,6 +1,7 @@
 import { useMemo, useEffect, useState, useCallback } from 'react';
 import { useSwitchChain } from 'wagmi';
 import { useOnchainWallet } from './useOnchainWallet';
+import { getChainName } from '../config/chainNames';
 
 export interface ChainAlignmentState {
   /** Whether wallet chain matches expected source network */
@@ -41,17 +42,6 @@ export interface ChainAlignmentState {
 const NETWORK_TO_CHAIN_ID: Record<string, number | undefined> = {
   'base': 8453,
   'solana': undefined, // Solana doesn't use EVM chain IDs
-};
-
-/**
- * Chain ID to human-readable name mapping
- */
-const CHAIN_ID_TO_NAME: Record<number, string> = {
-  1: 'Ethereum Mainnet',
-  8453: 'Base',
-  10: 'Optimism',
-  42161: 'Arbitrum One',
-  84532: 'Base Sepolia',
 };
 
 /**
@@ -101,7 +91,7 @@ export function useChainAlignment(sourceNetwork: 'base' | 'solana'): ChainAlignm
   // Get human-readable network name
   const walletNetworkName = useMemo(() => {
     if (chainType === 'solana') return 'Solana';
-    if (chainId) return CHAIN_ID_TO_NAME[chainId] || `Chain ${chainId}`;
+    if (chainId) return getChainName(chainId);
     return 'Unknown';
   }, [chainType, chainId]);
 
