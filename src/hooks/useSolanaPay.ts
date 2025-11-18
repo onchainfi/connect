@@ -414,6 +414,7 @@ export function useSolanaPay(config?: UseOnchainPayConfig) {
       
       // Check if this is a cross-chain payment
       const isCrossChain = sourceNetwork !== destinationNetwork;
+      const isSameChain = !isCrossChain;
       let recipientAddress = params.to;
       let bridgeOrderId: string | undefined;
 
@@ -438,6 +439,27 @@ export function useSolanaPay(config?: UseOnchainPayConfig) {
           sourceNetwork,
           destinationNetwork,
         });
+      }
+
+      // For same-chain: Use intermediate wallet from config for two-hop
+      let originalRecipient: string | undefined;
+      if (isSameChain) {
+        const { SUPPORTED_CHAINS } = await import('../config/chains');
+        const solanaChain = sourceNetwork?.includes('devnet') ? SUPPORTED_CHAINS.solanaDevnet : SUPPORTED_CHAINS.solana;
+        const intermediateWallet = solanaChain.samechainIntermediateWallet;
+
+        if (intermediateWallet) {
+          originalRecipient = recipientAddress; // Save original before overwriting
+          recipientAddress = intermediateWallet;
+          
+          console.log('💰 Same-chain two-hop payment:', {
+            originalRecipient,
+            intermediateWallet: recipientAddress,
+            network: sourceNetwork,
+          });
+        } else {
+          console.warn('⚠️ No intermediate wallet configured for Solana - payment will fail');
+        }
       }
 
       // Solana signing
@@ -469,7 +491,8 @@ export function useSolanaPay(config?: UseOnchainPayConfig) {
         destinationNetwork,
         expectedAmount: params.amount,
         expectedToken: params.token?.symbol || finalConfig.token.symbol,
-        recipientAddress: isCrossChain ? recipientAddress : params.to,
+        recipientAddress: recipientAddress, // For crosschain: adapter address, for samechain: intermediate wallet
+        finalRecipient: originalRecipient, // For samechain two-hop: original recipient
         priority,
         bridgeOrderId,
       });

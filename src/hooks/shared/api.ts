@@ -11,6 +11,7 @@ export interface VerifyPaymentParams {
   expectedAmount: string;
   expectedToken: string;
   recipientAddress: string;
+  finalRecipient?: string; // For two-hop samechain: original recipient
   priority: string;
   bridgeOrderId?: string;
 }
@@ -40,6 +41,7 @@ export interface BridgePrepareParams {
   recipientAddress: string;
 }
 
+
 /**
  * Call /v1/verify endpoint
  */
@@ -57,6 +59,7 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<any> {
       expectedAmount: params.expectedAmount,
       expectedToken: params.expectedToken,
       recipientAddress: params.recipientAddress,
+      ...(params.finalRecipient && { finalRecipient: params.finalRecipient }),
       priority: params.priority,
       ...(params.bridgeOrderId && { bridgeOrderId: params.bridgeOrderId }),
     }),
@@ -172,4 +175,5 @@ export async function prepareBridge(params: BridgePrepareParams): Promise<{ depo
     orderId: data.data.orderId,
   };
 }
+
 

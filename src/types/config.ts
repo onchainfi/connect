@@ -28,6 +28,7 @@ export interface ChainConfig {
     usdc: TokenConfig;
     [key: string]: TokenConfig;
   };
+  samechainIntermediateWallet?: string; // Intermediate wallet for two-hop samechain fee collection
 }
 
 export interface AppearanceConfig {

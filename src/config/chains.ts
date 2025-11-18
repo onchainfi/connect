@@ -24,6 +24,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         name: 'USD Coin',
       },
     },
+    samechainIntermediateWallet: process.env.NEXT_PUBLIC_SAMECHAIN_BASE_WALLET || '0xfeb1F8F7F9ff37B94D14c88DE9282DA56b3B1Cb1',
   },
   optimism: {
     id: 10,
@@ -121,6 +122,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         name: 'USD Coin',
       },
     },
+    samechainIntermediateWallet: process.env.NEXT_PUBLIC_SAMECHAIN_SOLANA_WALLET || 'DoVABZK8r9793SuR3powWCTdr2wVqwhueV9DuZu97n2L',
   },
   solanaDevnet: {
     id: 1399811150, // Custom ID for Solana devnet
