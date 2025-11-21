@@ -14,6 +14,14 @@ export interface VerifyPaymentParams {
   finalRecipient?: string; // For two-hop samechain: original recipient
   priority: string;
   bridgeOrderId?: string;
+  
+  // Fee tracking (optional - calculated by UI)
+  expectedFees?: {
+    processingFee: string;
+    ataFee?: string;
+    totalFees: string;
+  };
+  needsATACreation?: boolean;
 }
 
 export interface SettlePaymentParams {
@@ -62,6 +70,8 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<any> {
       ...(params.finalRecipient && { finalRecipient: params.finalRecipient }),
       priority: params.priority,
       ...(params.bridgeOrderId && { bridgeOrderId: params.bridgeOrderId }),
+      ...(params.expectedFees && { expectedFees: params.expectedFees }),
+      ...(params.needsATACreation !== undefined && { needsATACreation: params.needsATACreation }),
     }),
   });
 

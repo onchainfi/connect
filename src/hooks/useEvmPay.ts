@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useSignTypedData, useChainId } from 'wagmi';
 import { usePrivy } from '@privy-io/react-auth';
 import { useOnchainWallet } from './useOnchainWallet';
@@ -8,6 +8,7 @@ import { DEFAULT_PRIORITY } from '../config/defaults';
 import { verifyPayment, settlePayment, prepareBridge } from './shared/api';
 import { validateAmount, generateNonce, getValidityTimestamps } from './shared/validation';
 import type { PaymentParams, PaymentResult } from './useOnchainPay';
+import { getFeeConfig, DEFAULT_FEE_CONFIG, type FeeConfig } from './shared/feeConfig';
 
 interface PaymentState {
   signature?: string;
@@ -35,6 +36,7 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
   const [lastTxHash, setLastTxHash] = useState<string>();
   const [error, setError] = useState<Error>();
   const [paymentState, setPaymentState] = useState<PaymentState>({});
+  const [feeConfig, setFeeConfig] = useState<FeeConfig>(DEFAULT_FEE_CONFIG);
 
   // Merge config with global config
   const finalConfig = {
@@ -49,6 +51,24 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
     maxRetries: config?.maxRetries ?? 0,
     callbacks: config?.callbacks || {},
   };
+
+  // Fetch dynamic fee configuration from API
+  useEffect(() => {
+    if (finalConfig.apiKey && finalConfig.apiUrl) {
+      getFeeConfig(finalConfig.apiUrl, finalConfig.apiKey)
+        .then((config) => {
+          setFeeConfig(config);
+          console.log('[useEvmPay] ✅ Fee config loaded:', {
+            merchantTier: config.samechain.merchantTier,
+            currentFee: config.samechain.currentFee,
+            crosschainFee: config.crosschain.feePercent,
+          });
+        })
+        .catch((err) => {
+          console.warn('[useEvmPay] Failed to fetch fee config, using defaults:', err);
+        });
+    }
+  }, [finalConfig.apiKey, finalConfig.apiUrl]);
 
   const reset = useCallback(() => {
     setIsPaying(false);
@@ -212,6 +232,32 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
       const isSameChain = !isCrossChain;
       let recipientAddress = params.to;
       let bridgeOrderId: string | undefined;
+      
+      // Calculate fees using dynamic configuration from API
+      const amountValue = parseFloat(params.amount);
+      
+      // Use fee config from API (fetched in useEffect)
+      const feePercent = isCrossChain 
+        ? feeConfig.crosschain.feePercent 
+        : feeConfig.samechain.currentFee;
+      
+      let processingFee = (amountValue * feePercent) / 100;
+      
+      // Apply minimum for cross-chain
+      if (isCrossChain) {
+        const minFee = destinationNetwork.toLowerCase().includes('solana')
+          ? feeConfig.crosschain.minimumFeeSolana
+          : feeConfig.crosschain.minimumFeeBase;
+        processingFee = Math.max(processingFee, minFee);
+      }
+      
+      // Note: ATA fee handled by backend, not included in expectedFees here
+      const expectedFees = {
+        processingFee: processingFee.toFixed(6),
+        totalFees: processingFee.toFixed(6),
+      };
+      
+      console.log('[Verify] Calculated fees:', expectedFees);
 
       // For cross-chain: Get CCTP adapter address first
       if (isCrossChain) {
@@ -281,6 +327,8 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
         finalRecipient: originalRecipient, // For samechain two-hop: original recipient
         priority,
         bridgeOrderId,
+        expectedFees,
+        needsATACreation: false, // Backend will handle ATA detection
       });
 
       finalConfig.callbacks.onVerificationComplete?.();
