@@ -69,12 +69,11 @@ export function OnchainConnect({
   // Setup Solana wallet adapters
   const solanaEndpoint = useMemo(
     () => {
-      // Priority: prop > env var > public fallback
-      if (solanaRpcUrl) return solanaRpcUrl;
-      
-      if (typeof window !== 'undefined') {
-        const envRpc = (window as any).NEXT_PUBLIC_SOLANA_RPC_URL;
-        if (envRpc) return envRpc;
+      // Priority: prop > public fallback
+      // Note: solanaRpcUrl prop should be passed from consuming app's env vars
+      // e.g., <OnchainConnect solanaRpcUrl={process.env.NEXT_PUBLIC_SOLANA_RPC_URL} />
+      if (solanaRpcUrl) {
+        return solanaRpcUrl;
       }
       
       // Fallback to public (rate-limited, but safe)
