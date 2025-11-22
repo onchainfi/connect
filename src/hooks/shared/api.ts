@@ -27,6 +27,7 @@ export interface VerifyPaymentParams {
 export interface SettlePaymentParams {
   apiUrl: string;
   apiKey: string;
+  paymentId: string;            // REQUIRED: Payment ID from verify response
   paymentHeader: string;
   sourceNetwork: string;
   destinationNetwork: string;
@@ -98,6 +99,7 @@ export async function settlePayment(params: SettlePaymentParams): Promise<any> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
+      paymentId: params.paymentId,           // REQUIRED: Unique payment ID from verify
       paymentHeader: params.paymentHeader,
       sourceNetwork: params.sourceNetwork,
       destinationNetwork: params.destinationNetwork,

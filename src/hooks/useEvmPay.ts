@@ -16,6 +16,7 @@ interface PaymentState {
   sourceNetwork?: string;
   destinationNetwork?: string;
   priority?: string;
+  paymentId?: string;             // NEW: Payment ID from verify response
 }
 
 /**
@@ -208,7 +209,7 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
     return { signature, x402Header };
   }, [address, isConnected, isPrivyUser, privySignTypedData, signTypedDataAsync, finalConfig]);
 
-  const verify = useCallback(async (params: PaymentParams): Promise<PaymentResult & { x402Header?: string; sourceNetwork?: string; destinationNetwork?: string; priority?: string }> => {
+  const verify = useCallback(async (params: PaymentParams): Promise<PaymentResult & { x402Header?: string; sourceNetwork?: string; destinationNetwork?: string; priority?: string; paymentId?: string }> => {
     if (!finalConfig.apiKey) {
       const error = new Error('Onchain API key not provided');
       params.onError?.(error);
@@ -312,10 +313,8 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
       const { x402Header, signature } = await signPayment({ ...params, to: recipientAddress });
       console.log('[Verify] EVM signing successful');
 
-      // Store state for potential settle call
-      setPaymentState({ signature, x402Header, sourceNetwork, destinationNetwork, priority });
-
-      await verifyPayment({
+      // Call /verify API and capture paymentId
+      const verifyResponse = await verifyPayment({
         apiUrl: finalConfig.apiUrl,
         apiKey: finalConfig.apiKey,
         paymentHeader: x402Header,
@@ -331,10 +330,23 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
         needsATACreation: false, // Backend will handle ATA detection
       });
 
+      // CRITICAL: Extract paymentId from verify response
+      const paymentId = verifyResponse.data?.paymentId;
+      
+      if (!paymentId) {
+        console.error('[Verify] ❌ No paymentId returned from API:', verifyResponse);
+        throw new Error('Payment verification succeeded but no payment ID was returned. This is a server error.');
+      }
+
+      console.log('[Verify] ✅ Payment verified with ID:', paymentId);
+
+      // Store state for potential settle call (including paymentId)
+      setPaymentState({ signature, x402Header, sourceNetwork, destinationNetwork, priority, paymentId });
+
       finalConfig.callbacks.onVerificationComplete?.();
 
       // Return the payment data for immediate settle
-      return { success: true, verified: true, x402Header, sourceNetwork, destinationNetwork, priority };
+      return { success: true, verified: true, x402Header, sourceNetwork, destinationNetwork, priority, paymentId };
     } catch (error) {
       const err = error instanceof Error ? error : new Error('Unknown error');
       params.onError?.(err);
@@ -347,6 +359,7 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
 
   // Internal settle function that takes explicit parameters
   const settleInternal = useCallback(async (
+    paymentId: string,
     x402Header: string,
     sourceNetwork: string,
     destinationNetwork: string,
@@ -368,6 +381,7 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
       const data = await settlePayment({
         apiUrl: finalConfig.apiUrl,
         apiKey: finalConfig.apiKey,
+        paymentId,                            // REQUIRED: Payment ID from verify
         paymentHeader: x402Header,
         sourceNetwork,
         destinationNetwork,
@@ -404,7 +418,14 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
       return { success: false, error: error.message };
     }
 
+    if (!paymentState.paymentId) {
+      const error = new Error('No payment ID available. Verify did not return a payment ID.');
+      setError(error);
+      return { success: false, error: error.message };
+    }
+
     return settleInternal(
+      paymentState.paymentId,
       paymentState.x402Header,
       paymentState.sourceNetwork!,
       paymentState.destinationNetwork!,
@@ -426,7 +447,14 @@ export function useEvmPay(config?: UseOnchainPayConfig) {
 
       // Auto-settle if enabled
       if (finalConfig.autoSettle) {
+        if (!verifyResult.paymentId) {
+          const error = new Error('Payment verification succeeded but no payment ID was returned');
+          setError(error);
+          return { success: false, error: error.message };
+        }
+
         const settleResult = await settleInternal(
+          verifyResult.paymentId,
           verifyResult.x402Header!,
           verifyResult.sourceNetwork!,
           verifyResult.destinationNetwork!,

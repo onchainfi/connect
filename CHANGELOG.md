@@ -2,6 +2,121 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.0] - 2025-11-22
+
+### 🔒 Security Enhancement - Payment ID Linking
+
+This release implements mandatory payment ID linking between verification and settlement to prevent security exploits and ensure 100% certainty that verification occurs before settlement.
+
+### 🛡️ Security Changes
+
+#### Payment ID Flow
+- **`verifyPayment()`** now returns `paymentId` from API response
+- **`settlePayment()`** now requires `paymentId` as mandatory parameter
+- Payment state now tracks `paymentId` for settlement
+- Added validation checks for missing payment IDs
+
+#### API Changes
+- Updated `SettlePaymentParams` interface to include required `paymentId` field
+- Settlement requests now send `paymentId` to API for exact payment matching
+- Both `useEvmPay()` and `useSolanaPay()` hooks updated with new flow
+
+### 🐛 Bug Fixes
+
+#### Critical: Prevent Settlement Without Verification
+- **Issue:** API could settle payments without proper verification linkage
+- **Solution:** Mandatory `paymentId` ensures exact payment match
+- **Impact:** Prevents double-settlement, cross-merchant exploits, and race conditions
+
+### 🔄 Enhanced Features
+
+#### `useEvmPay()` Hook
+- Captures `paymentId` from verify response
+- Validates `paymentId` exists before settlement
+- Passes `paymentId` to settlement API
+- Returns `paymentId` in verify result for external use
+
+#### `useSolanaPay()` Hook
+- Captures `paymentId` from verify response
+- Validates `paymentId` exists before settlement
+- Passes `paymentId` to settlement API
+- Returns `paymentId` in verify result for external use
+
+#### `PaymentState` Interface
+- Added `paymentId?: string` field to track payment ID between verify and settle
+
+### ✨ Benefits
+
+#### Security
+- **Prevents double settlement:** Status check on exact payment ID
+- **Prevents cross-merchant exploits:** Ownership validation before settlement
+- **Prevents race conditions:** Atomic matching via unique payment ID
+- **Ensures verification first:** Cannot settle without valid payment ID from verify
+
+#### Reliability
+- Exact payment matching (no fuzzy searches)
+- Clear error messages when payment ID missing
+- Better debugging with payment ID tracking
+
+### 🎯 API Contract
+
+**New Verify Response:**
+```typescript
+{
+  valid: true,
+  paymentId: "cm3x4y5z6...",  // ← NEW: Required for settlement
+  facilitator: "PayAI",
+  txHash: "0x..."
+}
+```
+
+**New Settle Request:**
+```typescript
+{
+  paymentId: "cm3x4y5z6...",  // ← NEW: Required field
+  paymentHeader: "...",
+  sourceNetwork: "base",
+  destinationNetwork: "base"
+}
+```
+
+### 📦 Package Updates
+- Version bumped from 3.2.1 to 3.3.0
+- Fully backwards compatible with API v1 (but requires updated backend)
+- Works with backend commit `731a3be` or later
+
+### 🚀 Migration
+
+**Automatic** - No code changes needed if using `useOnchainPay()`:
+```tsx
+// This still works identically - payment ID handled automatically
+const { pay } = useOnchainPay();
+await pay({ to: '0x...', amount: '0.10' });
+```
+
+**Manual verify/settle** users (if any):
+```tsx
+// Before (no longer works with new API):
+const verifyResult = await verify({ to, amount });
+await settle();
+
+// After (payment ID automatically captured and used):
+const verifyResult = await verify({ to, amount });
+// verifyResult.paymentId is now available
+await settle();  // Uses captured paymentId from state
+```
+
+### ⚠️ Breaking Changes
+
+**Backend Compatibility:** Requires backend API v1 with payment ID support (commit `731a3be` or later). Older backends will reject settlement requests due to missing `paymentId` field.
+
+### 🔗 Related
+
+- Backend PR: Commit `731a3be` - "Require payment ID linking between verify and settle"
+- See backend CHANGELOG for server-side security improvements
+
+---
+
 ## [3.0.0] - 2025-11-16
 
 ### 🎉 Major Architectural Refactor - Separate EVM and Solana Hooks
